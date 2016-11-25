@@ -263,13 +263,20 @@ class ManipulationDreamBed(object):
             controllerName = action.name + '_controller'
             controllerKey = action.getParameterPrefix() + '_controller'
             # save the planner method for this action (key, method_choice, input, bFinished, result)
-            methods.append(MethodDescription(name=plannerName, type=self._getMethodTypes(action)[0],
-                                             method_choice=kwargs[plannerKey], inputs=action.getInputs(), finished=False, result=None, isOptional=action.isOptional(),
+            methods.append(MethodDescription(name=plannerName,
+                                             type=self._getMethodTypes(action)[0],
+                                             method_choice=kwargs[plannerKey],
+                                             inputs=action.getInputs(), finished=False,
+                                             result=None, isOptional=action.isOptional(),
                                              paramPrefix=action.getParameterPrefix() + '_planner'))
             # save the controller method for this action (key, method_choice, input, bFinished)
             methods.append(MethodDescription(name=controllerName,
                                              type=self._getMethodTypes(action)[1],
-                                             method_choice=kwargs[controllerKey], inputs=action.getInputs(), finished=False, result=None, isOptional=action.isOptional(),
+                                             method_choice=kwargs[controllerKey],
+                                             inputs=action.getInputs(),
+                                             finished=False,
+                                             result=None,
+                                             isOptional=action.isOptional(),
                                              paramPrefix=action.getParameterPrefix() + '_controller'))
 
         # print methods

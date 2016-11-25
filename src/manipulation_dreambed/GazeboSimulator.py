@@ -30,9 +30,26 @@ class RobotSimulator(object):
         return False
 
     @abc.abstractmethod
+    def reset(self):
+        """ Resets the robot simulator to its initial state. """
+        pass
+
+    @abc.abstractmethod
     def cleanUp(self):
         """ Clean up when the program is stopped. """
         pass
+
+class ROSRobotSimulator(RobotSimulator):
+    """ An implementation of the robot simulator interface that sends the issued
+        commands through ROS services to a remote ROS node"""
+    def __init__(self, rosServicePrefix='/robot_simulator/'):
+        self._servicePrefix = rosServicePrefix
+        self._resetRobotService = None
+        self._cleanUpService = None
+        self._initService = None
+
+    #TODO implement the interface and call respective services
+
 
 class GazeboSimulatorWrapper(Simulator):
     # TODO: do we need to write a gazebo plugin for this? -> measure time + maybe something else

@@ -10,7 +10,7 @@ import pysmac
 import IPython
 import rospy
 import PySMACROSInterface
-from manipulation_optimizer.srv import DreamBedEvaluation, DreamBedEvaluationResponse
+from manipulation_dreambed.srv import DreamBedEvaluation, DreamBedEvaluationResponse
 import yaml
 
 
