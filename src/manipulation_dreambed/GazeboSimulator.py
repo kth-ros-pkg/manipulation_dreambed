@@ -5,8 +5,9 @@
 
     @author: Joshua Haustein (haustein@kth.se)
 """
-from manipulation_dreambed import Simulator
+from manipulation_dreambed.ManipulationDreamBed import Simulator
 from std_srvs.srv import Empty as EmptyService
+from std_srvs.srv import Trigger as TriggerService
 from std_msgs.msg import Empty as EmptyMessage
 from std_msgs.msg import Bool as BoolMessage
 from gazebo_msgs.srv import SpawnModel, DeleteModel, GetWorldProperties, GetModelState, SetModelState
@@ -39,21 +40,39 @@ class RobotSimulator(object):
         """ Clean up when the program is stopped. """
         pass
 
+
 class ROSRobotSimulator(RobotSimulator):
     """ An implementation of the robot simulator interface that sends the issued
         commands through ROS services to a remote ROS node"""
-    def __init__(self, rosServicePrefix='/robot_simulator/'):
-        self._servicePrefix = rosServicePrefix
+    def __init__(self,
+                 initServiceName='/robot_simulator/init_robot_simulator',
+                 resetServiceName='/robot_simulator/reset_robot_simulator',
+                 cleanUpServiceName='/robot_simulator/cleanup_robot_simulator'):
+        self._serviceNames = (initServiceName, resetServiceName, cleanUpServiceName)
         self._resetRobotService = None
         self._cleanUpService = None
         self._initService = None
 
-    #TODO implement the interface and call respective services
+    def init(self):
+        rospy.wait_for_service(self._serviceNames[0])
+        rospy.wait_for_service(self._serviceNames[1])
+        rospy.wait_for_service(self._serviceNames[2])
+        self._initService = rospy.ServiceProxy(self._serviceNames[0], TriggerService)
+        self._resetRobotService =rospy.ServiceProxy(self._serviceNames[1], EmptyService)
+        self._cleanUpService = rospy.ServiceProxy(self._serviceNames[2], EmptyService)
+        initResult = self._initService()
+        return initResult.success
+
+    def reset(self):
+        self._resetRobotService()
+
+    def cleanUp(self):
+        self._cleanUpService()
 
 
 class GazeboSimulatorWrapper(Simulator):
     # TODO: do we need to write a gazebo plugin for this? -> measure time + maybe something else
-    def __init__(self, modelPathFile, robotSimulator):
+    def __init__(self, modelPathFile, robotSimulator=None):
         self.bPaused = False
         # Gazebo services
         self._unpauseService = None
@@ -70,6 +89,8 @@ class GazeboSimulatorWrapper(Simulator):
         self._getJointPropertiesService = None
         self._getModelPropertiesService = None
         self._setModelConfigurationService = None
+        if robotSimulator is None:
+            robotSimulator = ROSRobotSimulator()
         self._robotSimulator = robotSimulator
 
         # self.modelRootPath = modelPath

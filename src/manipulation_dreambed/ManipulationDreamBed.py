@@ -8,7 +8,6 @@
 import abc
 import ROSUtils
 import yaml
-import warnings
 import sys
 import importlib
 import ActionPrimitives
@@ -365,9 +364,10 @@ class ManipulationDreamBed(object):
                 raise IOError('The provided portfolio description is empty. (File: %s)' % self.portfolioDescription)
             portfolioInfo = yaml.load(fileContent)
             if 'paths' in portfolioInfo:
-                warnings.warn('Loading additional paths to the system path.' +
+                self._logger.logwarn('Loading additional paths to the system path.' +
                               ' Please note that this is a potential security hazard.')
                 paths = map(ROSUtils.resolvePath, portfolioInfo['paths'].split(';'))
+                self._logger.logwarn('Adding paths %s to system path.' % str(paths))
                 sys.path.extend(paths)
             if 'portfolio' not in portfolioInfo:
                 f.close()
@@ -386,6 +386,7 @@ class ManipulationDreamBed(object):
         method_class = new_module.__getattribute__(methodDesc['class'])
         method_instance = method_class(methodDesc['parameters'])
         types = methodDesc['types'].split(';')
+        self._logger.loginfo('ManipulationDreamBed: Created method %s' % method_instance.getName())
         for t in types:
             self.methodPortfolio[t].update([(method_instance.getName(), method_instance)])
 
