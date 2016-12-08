@@ -152,8 +152,10 @@ class DefaultPerformanceJudge(PerformanceJudge):
         return -(math.pow(self.numSuccess, 3) / (self.pathLength * self.runtime))
         # return self.numOptionalFails * self.optionalFailPenalty + self.pathLength + self.runtime / 60.0
 
+
 class MethodDescription:
-    def __init__(self, name, type, method_choice, inputs, finished, result, isOptional, paramPrefix):
+    def __init__(self, name, type, method_choice, inputs, finished,
+                 result, isOptional, paramPrefix):
         self.name = name
         self.type = type
         self.method_choice = method_choice
@@ -171,7 +173,8 @@ class MethodDescription:
 
 
 class ManipulationDreamBed(object):
-    def __init__(self, simulator, portfolioDescription, logFileName=None, judge=None, logger=Logger()):
+    def __init__(self, simulator, portfolioDescription, logFileName=None,
+                 judge=None, logger=Logger()):
         """ Creates a new instance of a manipulation dreambed.
             @param simulator - the simulator to use (must implement the simulator interface)
             @param portfolioDescription - path to a file containing the portfolio description
@@ -248,93 +251,48 @@ class ManipulationDreamBed(object):
         return (parameters, conditionals.values(), [])
 
     def evaluate(self, **kwargs):
-        # run over task and execute methods with their respective parameters
-        # and collect perfomance measures
-        # build up a list of all methods we need to run
-        methods = []
+        # First copy the scene so we can modify it
         originalScene = self.context.getSceneInformation()
         modifiableScene = copy.deepcopy(originalScene)
         self.context.sceneInfo = modifiableScene
-        # print 'Starting evaluate'
-        for action in self.context.task.actions:
-            plannerName = action.name + '_planner'
-            plannerKey = action.getParameterPrefix() + '_planner'
-            controllerName = action.name + '_controller'
-            controllerKey = action.getParameterPrefix() + '_controller'
-            # save the planner method for this action (key, method_choice, input, bFinished, result)
-            methods.append(MethodDescription(name=plannerName,
-                                             type=self._getMethodTypes(action)[0],
-                                             method_choice=kwargs[plannerKey],
-                                             inputs=action.getInputs(), finished=False,
-                                             result=None, isOptional=action.isOptional(),
-                                             paramPrefix=action.getParameterPrefix() + '_planner'))
-            # save the controller method for this action (key, method_choice, input, bFinished)
-            methods.append(MethodDescription(name=controllerName,
-                                             type=self._getMethodTypes(action)[1],
-                                             method_choice=kwargs[controllerKey],
-                                             inputs=action.getInputs(),
-                                             finished=False,
-                                             result=None,
-                                             isOptional=action.isOptional(),
-                                             paramPrefix=action.getParameterPrefix() + '_controller'))
 
-        # print methods
-        # start executing the methods
+        # Now, build up a list of all methods we need to run
+        methods = self._assembleMethodsList(kwargs)
+        methods = self._resolveDependencies(methods)
+        # Set the simulator up and let the judge know execution is starting.
         self.simulator.setWorldState(self.context.getSceneInformation())
         self._judge.reset()
         self._judge.start()
-        nextMethodIndex = 0
+        # Initialize some variables
         numExecutedMethods = 0
         (success, result) = (True, None)
-        # print 'iterating over methods'
-        while numExecutedMethods < len(methods):
-            # print 'running method ', numExecutedMethods
-            currentMethodIndex = nextMethodIndex
-            currentMethodDesc = methods[currentMethodIndex]
-            # before we can execute the current method we need to check whether it depends on
-            # the result of the next grasp method.
-            (bNeedsGrasp, graspMethodIndex) = self._needsGrasp(currentMethodDesc, methods)
-            if bNeedsGrasp:
-                nextMethodIndex = currentMethodIndex
-                currentMethodDesc = methods[graspMethodIndex]
-                self._logger.logdebug('Arm planner requires grasp planner to ' +
-                                      'be executed first, executing grasp planner.')
-            else:
-                nextMethodIndex = currentMethodIndex + 1
-            # the current method might be a grasp planning method which we already computed
-            if currentMethodDesc.finished:
-                (success, result) = (True, currentMethodDesc.result)
+        # Run over task and execute methods with their respective parameters
+        # and collect performance measures
+        for method in methods:
+            self._logger.logdebug('Running method ' + str(numExecutedMethods))
+            # The current method might be a method that is duplicated due to dependencies.
+            # In that case it has already been computed before and we can skip it.
+            if method.finished:
+                result = method.result
+                success = result is not None
                 self._logger.logdebug('Current method (must be a grasp planner) ' +
                                       'already executed before, skipping it.')
                 continue
 
-            # execute the current method and pass it the result of the previous method
-            (success, result) = self._executeMethod(currentMethodDesc, kwargs, result)
+            # Execute the current method and pass it the result of the previous method
+            (success, result) = self._executeMethod(method, kwargs, result)
             if not success:
-                self._judge.methodFailed(currentMethodDesc, result)
-                msg = 'Current method ' + currentMethodDesc.name + ' of type ' + currentMethodDesc.type + ' failed.'
+                self._judge.methodFailed(method, result)
+                msg = 'Current method ' + method.name + ' of type ' + method.type + ' failed.'
                 self._logger.logwarn(msg)
+                result = None
                 # we can skip this method if it is optional
-                canSkip = currentMethodDesc.optional
-                # If this method is a planner, we also need to see what the next method is.
-                # In any case the next method depends on the result of the planner, so we need to
-                # take check whether the next method is optional or not.
-                if currentMethodDesc.isPlanner():
-                    nextMethod = methods[nextMethodIndex]
-                    canSkip = canSkip and nextMethod.optional
-                    # unless this is a grasp planner, the next method is the controller
-                    # for this method and we should skip it. Otherwise its a ArmPlanner depending
-                    # on a grasp
-                    if nextMethod.isController():
-                        nextMethodIndex = nextMethodIndex + 1
-                        numExecutedMethods += 1
-                if not canSkip:
-                    self._logger.logwarn('The method (or a dependent method) was not optional, aborting execution.')
+                if not method.optional:
+                    self._logger.logwarn('The failed method was not optional, aborting execution.')
                     break
-
             else:
                 self.simulator.getWorldState(self.context.getSceneInformation())
-                self._judge.methodSucceeded(currentMethodDesc, result)
+                self._judge.methodSucceeded(method, result)
             numExecutedMethods += 1
 
         self._judge.stop()
@@ -354,6 +312,32 @@ class ManipulationDreamBed(object):
     def destroy(self):
         self.simulator.terminate()
         self._destroyPortfolio()
+
+    def _assembleMethodsList(self, kwargs):
+        methods = []
+        for action in self.context.task.actions:
+            plannerName = action.name + '_planner'
+            plannerKey = action.getParameterPrefix() + '_planner'
+            controllerName = action.name + '_controller'
+            controllerKey = action.getParameterPrefix() + '_controller'
+            (plannerType, controllerType) = self._getMethodTypes(action)
+            # save the planner method for this action
+            methods.append(MethodDescription(name=plannerName,
+                                             type=plannerType,
+                                             method_choice=kwargs[plannerKey],
+                                             inputs=action.getInputs(), finished=False,
+                                             result=None, isOptional=action.isOptional(),
+                                             paramPrefix=plannerKey))
+            # save the controller method for this action
+            methods.append(MethodDescription(name=controllerName,
+                                             type=controllerType,
+                                             method_choice=kwargs[controllerKey],
+                                             inputs=action.getInputs(),
+                                             finished=False,
+                                             result=None,
+                                             isOptional=action.isOptional(),
+                                             paramPrefix=controllerKey))
+        return methods
 
     def _createPortfolio(self):
         try:
@@ -442,7 +426,13 @@ class ManipulationDreamBed(object):
         method = self.methodPortfolio[currentMethodDesc.type][currentMethodDesc.method_choice]
         self._resolveResourceAllocationConflicts(method)
         inputs = currentMethodDesc.inputs
-        # switch case method types
+        # It is possible that the previous method failed and we do not have a previous result.
+        # If this method is a controller it always needs a result, hence we can just abort if
+        # we don't have a previous result.
+        if currentMethodDesc.isController() and previousResult is None:
+            return (False, None)
+
+        # Else switch case method types
         if currentMethodDesc.type == 'ArmPlanner':
             solution = self._executeArmPlanner(planner=method, inputs=inputs,
                                                paramPrefix=currentMethodDesc.paramPrefix,
@@ -476,7 +466,9 @@ class ManipulationDreamBed(object):
         goal = inputs['goal']
         if isinstance(goal, ActionPrimitives.GraspReference):
             if graspResult is None or not isinstance(graspResult, GraspResult):
-                raise RuntimeError('Could not resolve goal for arm planner.')
+                # raise RuntimeError('Could not resolve goal for arm planner.')
+                self._logger.logwarn('Could not resolve goal grasp for arm planner. Arm planner failed')
+                return None
             # TODO add constraints (orientation and approach vector)
             goal = graspResult.position
 
@@ -524,6 +516,17 @@ class ManipulationDreamBed(object):
                 raise ValueError('The action %s in the given task requires methods that are not available.' % action)
 
         return True
+
+    def _resolveDependencies(self, methods):
+        """ Adds a duplicate reference for each grasp planning method that an arm planning
+            method depends on in front of the respective arm planning method."""
+        extendedMethods = []
+        for method in methods:
+            (bNeedsGrasp, graspMethodIndex) = self._needsGrasp(method, methods)
+            if bNeedsGrasp:
+                extendedMethods.append(methods[graspMethodIndex])
+            extendedMethods.append(method)
+        return extendedMethods
 
     def _resolveResourceAllocationConflicts(self, newMethod):
         remainingAllocatedMethods = []
