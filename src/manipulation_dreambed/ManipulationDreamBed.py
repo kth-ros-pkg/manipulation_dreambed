@@ -14,7 +14,9 @@ import ActionPrimitives
 import time
 import copy
 import math
-from MethodTypes import (Trajectory, GraspResult)
+from MethodTypes import (Trajectory, GraspResult, METHOD_TYPES_STRING, ArmPlanner,
+                         ArmController, GraspPlanner, GraspController, PlacePlanner,
+                         PlaceController)
 
 
 class Logger(object):
@@ -142,7 +144,7 @@ class DefaultPerformanceJudge(PerformanceJudge):
 
     def methodSucceeded(self, methodDesc, methodResult):
         self.numSuccess += 1
-        if methodDesc.type == "ArmPlanner":
+        if methodDesc.type == ArmPlanner.STRING_REPRESENTATION:
             # methodResult should be of type Trajectory
             self.pathLength += methodResult.getPathLength()
 
@@ -153,9 +155,51 @@ class DefaultPerformanceJudge(PerformanceJudge):
         # return self.numOptionalFails * self.optionalFailPenalty + self.pathLength + self.runtime / 60.0
 
 
+class MethodDescriptionBatch:
+    def __init__(self, methodName):
+        self._descriptions = []
+        self._types = []
+        self._arguments = []
+        self._results = []
+        self._methodName = methodName
+
+    def getMethodName(self):
+        return self._methodName
+
+    def getBatchSize(self):
+        return len(self._descriptions)
+
+    def addMethodDescription(self, methodDesc):
+        self._descriptions.append(methodDesc)
+        self._types.append(methodDesc.type)
+        inputs = methodDesc.inputs.copy()
+        inputs['paramPrefix'] = methodDesc.paramPrefix
+        self._arguments.append(inputs)
+        self._results.append((False, None))
+
+    def getType(self, idx):
+        return self._types[idx]
+
+    def getArguments(self, idx):
+        return self._arguments[idx]
+
+    def setResult(self, idx, bSuccess, result):
+        self._results[idx] = (bSuccess, result)
+
+    def getMethodDescriptions(self):
+        return self._descriptions
+
+    def getFailedMethods(self):
+        failedMethods = []
+        for idx in range(len(self._results)):
+            if not self._results[idx][0]:
+                failedMethods.append(self._descriptions[idx])
+        return failedMethods
+
+
 class MethodDescription:
     def __init__(self, name, type, method_choice, inputs, finished,
-                 result, isOptional, paramPrefix):
+                 result, isOptional, paramPrefix, supplyMethodDesc=None):
         self.name = name
         self.type = type
         self.method_choice = method_choice
@@ -164,12 +208,19 @@ class MethodDescription:
         self.result = result
         self.optional = isOptional
         self.paramPrefix = paramPrefix
+        self.supplyMethodDesc = supplyMethodDesc
 
     def isPlanner(self):
         return "Planner" in self.type
 
     def isController(self):
         return not self.isPlanner()
+
+    # TODO???
+    # def getInputs(self):
+    #     if self.type == 'ArmPlanner':
+    #         inputs = {'goal': self.inputs['goal']}
+    #     solution = planner.plan(goal=goal, context=self.context, paramPrefix=paramPrefix, parameters=parameters)
 
 
 class ManipulationDreamBed(object):
@@ -189,9 +240,6 @@ class ManipulationDreamBed(object):
         self.context = None
         self._runningGraspController = None  # TODO: this is not particularly nice to have
         self._allocatedMethods = []
-        self.methodTypes = ('ArmController', 'ArmPlanner', 'COMController',
-                            'COMPlanner', 'GraspPlanner', 'GraspController', 'PlaceController',
-                            'PlacePlanner', 'ToolUsePlanner', 'ToolUseController')
         self.methodPortfolio = {}
         if judge is None:
             self._judge = DefaultPerformanceJudge(simulator)
@@ -202,7 +250,7 @@ class ManipulationDreamBed(object):
             self._logFileName = ''
         else:
             self._logFileName = logFileName
-        for mt in self.methodTypes:
+        for mt in METHOD_TYPES_STRING:
             self.methodPortfolio[mt] = {}
 
     def init(self):
@@ -255,7 +303,6 @@ class ManipulationDreamBed(object):
         originalScene = self.context.getSceneInformation()
         modifiableScene = copy.deepcopy(originalScene)
         self.context.sceneInfo = modifiableScene
-
         # Now, build up a list of all methods we need to run
         methods = self._assembleMethodsList(kwargs)
         methods = self._resolveDependencies(methods)
@@ -265,36 +312,50 @@ class ManipulationDreamBed(object):
         self._judge.start()
         # Initialize some variables
         numExecutedMethods = 0
-        (success, result) = (True, None)
+        success = True
+        prevMethodName = None
         # Run over task and execute methods with their respective parameters
         # and collect performance measures
-        for method in methods:
+        while numExecutedMethods < len(methods) and success:
             self._logger.logdebug('Running method ' + str(numExecutedMethods))
-            # The current method might be a method that is duplicated due to dependencies.
-            # In that case it has already been computed before and we can skip it.
-            if method.finished:
-                result = method.result
-                success = result is not None
-                self._logger.logdebug('Current method (must be a grasp planner) ' +
-                                      'already executed before, skipping it.')
-                continue
-
-            # Execute the current method and pass it the result of the previous method
-            (success, result) = self._executeMethod(method, kwargs, result)
+            batch = None # set batch to None so we don't execute an old batch again
+            currentMethod = methods[numExecutedMethods]
+            # Check whether we are using a new method and whether it supports batch processing
+            if prevMethodName != currentMethod.getName() and currentMethod.supportsBatchProcessing():
+                # in this case create a batch and execute it as batch
+                batch = self._assembleBatch(methods[numExecutedMethods:])
+            if batch is not None:
+                # Execute the current batch
+                (success, result) = self._executeBatch(batch, kwargs)
+                numExecutedMethods += batch.getBatchSize()
+            else:
+                # Execute the current method and pass it the result of the previous method
+                (success, result) = self._executeMethod(currentMethod, kwargs)
+                numExecutedMethods += 1
             if not success:
-                self._judge.methodFailed(method, result)
-                msg = 'Current method ' + method.name + ' of type ' + method.type + ' failed.'
-                self._logger.logwarn(msg)
-                result = None
-                # we can skip this method if it is optional
-                if not method.optional:
-                    self._logger.logwarn('The failed method was not optional, aborting execution.')
-                    break
+                failedMethods = [currentMethod]
+                if batch is not None:
+                    failedMethods = batch.getFailedMethods()
+                for failedMethod in failedMethods:
+                    self._judge.methodFailed(failedMethod, result)
+                    msg = 'The method ' + failedMethod.name + ' of type ' + failedMethod.type + ' failed.'
+                    self._logger.logwarn(msg)
+                    result = None
+                    # we can skip this method if it is optional
+                    if not failedMethod.optional:
+                        self._logger.logwarn('The failed method was not optional, aborting execution.')
+                        success = False
+                    else:
+                        success = True
             else:
                 self.simulator.getWorldState(self.context.getSceneInformation())
-                self._judge.methodSucceeded(method, result)
-            numExecutedMethods += 1
+                successfulMethods = [currentMethod]
+                if batch is not None:
+                    successfulMethods = batch.getMethodDescriptions()
+                for successfulMethod in successfulMethods:
+                    self._judge.methodSucceeded(successfulMethod, result)
 
+        # We are done executing. Let the judge know and reset everything
         self._judge.stop()
         self.context.sceneInfo = originalScene
         self._releaseResources()
@@ -336,7 +397,8 @@ class ManipulationDreamBed(object):
                                              finished=False,
                                              result=None,
                                              isOptional=action.isOptional(),
-                                             paramPrefix=controllerKey))
+                                             paramPrefix=controllerKey,
+                                             supplyMethodDesc=methods[-1]))
         return methods
 
     def _createPortfolio(self):
@@ -356,8 +418,8 @@ class ManipulationDreamBed(object):
             if 'portfolio' not in portfolioInfo:
                 f.close()
                 raise RuntimeError('The given portfolio file does not contain any algorithm.')
-            methodDescription = portfolioInfo['portfolio']
-            for methodDesc in methodDescription:
+            methodDescriptions = portfolioInfo['portfolio']
+            for methodDesc in methodDescriptions:
                 self._createMethod(methodDesc)
             self.bPortfolioLoaded = True
             f.close()
@@ -393,39 +455,58 @@ class ManipulationDreamBed(object):
 
     def _getMethodTypes(self, action):
         if isinstance(action, ActionPrimitives.MoveArmAction):
-            plannerType = "ArmPlanner"
-            controllerType = "ArmController"
+            plannerType = ArmPlanner.STRING_REPRESENTATION
+            controllerType = ArmController.STRING_REPRESENTATION
         elif isinstance(action, ActionPrimitives.GraspAction):
-            plannerType = "GraspPlanner"
-            controllerType = "GraspController"
+            plannerType = GraspPlanner.STRING_REPRESENTATION
+            controllerType = GraspController.STRING_REPRESENTATION
         elif isinstance(action, ActionPrimitives.PlaceAction):
-            plannerType = "PlacePlanner"
-            controllerType = "PlaceController"
+            plannerType = PlacePlanner.STRING_REPRESENTATION
+            controllerType = PlaceController.STRING_REPRESENTATION
         else:
             raise NotImplementedError('%a - only MoveArm-, Grasp-, and PlaceAction are implemented yet.' % action)
         return (plannerType, controllerType)
 
-    def _needsGrasp(self, currentMethod, methods):
-        if currentMethod.type != 'ArmPlanner':
-            return (False, 0)
-        goal = currentMethod.inputs['goal']
-        if isinstance(goal, ActionPrimitives.GraspReference):
-            index = 0
-            for m in methods:
-                plannerName = goal.graspActionName + '_planner'
-                if m.name == plannerName:
-                    return (not m.finished, index)
-                index += 1
-            raise RuntimeError('There is no planner selected for the referenced grasp action %s.' %
-                               goal.graspActionName)
-        return (False, 0)
+    def _executeBatch(self, batch, parameters):
+        self._logger.loginfo('Executing batch. Batch method is ' + batch.getMethodName())
+        # First do some sanity checks for the first role
+        firstMethodRole = batch.getMethodDescriptions()[0]
+        previousResult = firstMethodRole.supplyMethodDesc.result
+        if firstMethodRole.isController() and previousResult is None:
+            return (False, None)
+        if firstMethodRole.type == GraspController.STRING_REPRESENTATION and\
+                not isinstance(previousResult, GraspResult):
+            raise ValueError('Attempting to execute a grasp controller, but no grasp given')
+        # If all these conditions are fulfilled, let's create the arguments for batch execution
+        # First, get the method that is going to execute the batch
+        types = [batch.getType(idx) for idx in range(len(batch.getBatchSize()))]
+        # TODO we could do a sanity check here, whether this method is really registered for all assigned roles
+        method = self.methodPortfolio[types[0]][batch.getMethodName()]
+        # Create the inputs for all roles
+        batchInput = [(batch.getType(idx), batch.getArguments(idx)) for idx in range(len(batch.getBatchSize()))]
+        # Make sure nothing is conflicting
+        self._resolveResourceAllocationConflicts(method, types)
+        # Now execute the batch
+        results = method.executeBatch(startContext=self.context, batchInput=batchInput, parameters=parameters)
+        # Next, save the results in our batch data structure
+        idx = 0
+        bAllSuccess = True
+        for (bSuccess, result) in results:
+            batch.setResult(idx, bSuccess=bSuccess, result=result)
+            idx += 1
+            bAllSuccess = bAllSuccess and bSuccess
 
-    def _executeMethod(self, currentMethodDesc, parameters, previousResult):
+        # Return success if we have a success for all batch elements
+        bAllSuccess = bAllSuccess and idx == batch.getBatchSize() - 1
+        return (bAllSuccess, results[-1][1]) # the result is the result of the last batch element
+
+    def _executeMethod(self, currentMethodDesc, parameters):
         self._logger.loginfo('Executing method ' + str(currentMethodDesc))
         # get the instance of the selected method
         method = self.methodPortfolio[currentMethodDesc.type][currentMethodDesc.method_choice]
-        self._resolveResourceAllocationConflicts(method)
+        self._resolveResourceAllocationConflicts(method, [currentMethodDesc.type])
         inputs = currentMethodDesc.inputs
+        previousResult = currentMethodDesc.supplyMethodDesc.result
         # It is possible that the previous method failed and we do not have a previous result.
         # If this method is a controller it always needs a result, hence we can just abort if
         # we don't have a previous result.
@@ -433,22 +514,22 @@ class ManipulationDreamBed(object):
             return (False, None)
 
         # Else switch case method types
-        if currentMethodDesc.type == 'ArmPlanner':
+        if currentMethodDesc.type == ArmPlanner.STRING_REPRESENTATION:
             solution = self._executeArmPlanner(planner=method, inputs=inputs,
                                                paramPrefix=currentMethodDesc.paramPrefix,
                                                parameters=parameters, graspResult=previousResult)
             success = solution is not None
-        elif currentMethodDesc.type == 'ArmController':
+        elif currentMethodDesc.type == ArmController.STRING_REPRESENTATION:
             solution = None
             success = self._executeArmController(controller=method, inputs=inputs,
                                                  paramPrefix=currentMethodDesc.paramPrefix,
                                                  parameters=parameters, traj=previousResult)
-        elif currentMethodDesc.type == 'GraspPlanner':
+        elif currentMethodDesc.type == GraspPlanner.STRING_REPRESENTATION:
             solution = self._executeGraspPlanner(planner=method, inputs=inputs,
                                                  paramPrefix=currentMethodDesc.paramPrefix,
                                                  parameters=parameters)
             success = solution is not None
-        elif currentMethodDesc.type == 'GraspController':
+        elif currentMethodDesc.type == GraspController.STRING_REPRESENTATION:
             solution = None
             if not isinstance(previousResult, GraspResult):
                 raise ValueError('Attempting to execute a grasp controller, but no grasp given.')
@@ -520,25 +601,48 @@ class ManipulationDreamBed(object):
     def _resolveDependencies(self, methods):
         """ Adds a duplicate reference for each grasp planning method that an arm planning
             method depends on in front of the respective arm planning method."""
-        extendedMethods = []
-        for method in methods:
-            (bNeedsGrasp, graspMethodIndex) = self._needsGrasp(method, methods)
-            if bNeedsGrasp:
-                extendedMethods.append(methods[graspMethodIndex])
-            extendedMethods.append(method)
-        return extendedMethods
+        reorderedMethods = []
+        skipIndex = -1
+        # Run over all methods and check whether its an ArmPlanner depending on a grasp planner
+        for i in range(len(methods)):
+            method = methods[i]
+            # Check whether we have to move a Grasp planner to the front.
+            if method.type == ArmPlanner.STRING_REPRESENTATION:
+                goal = method.inputs['goal']
+                if isinstance(goal, ActionPrimitives.GraspReference):
+                    reorderedMethods.append(methods[i + 2])
+                    method.supplyMethodDesc = methods[i + 2]
+                    skipIndex = i + 2
 
-    def _resolveResourceAllocationConflicts(self, newMethod):
+            if i != skipIndex:
+                reorderedMethods.append(method)
+        return reorderedMethods
+
+    def _resolveResourceAllocationConflicts(self, newMethod, activeRoles):
         remainingAllocatedMethods = []
-        for allocMeth in self._allocatedMethods:
-            if allocMeth.hasResourceConflict(newMethod):
-                allocMeth.releaseResources()
+        for allocatedMethod in self._allocatedMethods:
+            if allocatedMethod.hasResourceConflict(activeRoles):
+                allocatedMethod.releaseResources(roles=activeRoles)
             else:
-                remainingAllocatedMethods.append(allocMeth)
-        newMethod.allocateResources()
+                remainingAllocatedMethods.append(allocatedMethod)
+        newMethod.allocateResources(roles=activeRoles)
         remainingAllocatedMethods.append(newMethod)
         self._allocatedMethods = remainingAllocatedMethods
 
     def _releaseResources(self):
         for ameth in self._allocatedMethods:
             ameth.releaseResources()
+
+    def _assembleBatch(self, methods):
+        batchSize = 0
+        methodName = methods[0].getName()
+        batch = MethodDescriptionBatch(methodName=methodName)
+        # count how many roles this method takes in a sequence
+        while batchSize < len(methods) and methodName == methods[batchSize].getName():
+            batch.addMethodDescription(methods[batchSize])
+            batchSize += 1
+        # A batch has to have size > 1, else it's just a single method
+        if batchSize <= 1:
+            return None
+        return batch
+

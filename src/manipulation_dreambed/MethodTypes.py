@@ -7,8 +7,10 @@
 import abc
 
 
-class MethodType(object):
-    """ Abstract super class of each method type. """
+
+
+class PortfolioMethod(object):
+    """ Abstract super class of each method. """
     __metaclass__ = abc.ABCMeta
 
     @abc.abstractmethod
@@ -23,7 +25,7 @@ class MethodType(object):
                           (for instance an ArmPlanner and ArmController) this parameter specifies
                           for which role the parameters should be returned. In the example, if this
                           method has the parameters plannerParamA, plannerParamB, controllerParamA
-                          it would return plannerParamA and plannerParamB in case role = ArmPlanner
+                          it would return plannerParamA and plannerParamB in case role == ArmPlanner
                           and controllerParamA in case role == ArmController
             @param paramPrefix - a string containing the prefix used for the parameters keys
         """
@@ -47,22 +49,27 @@ class MethodType(object):
 
     @abc.abstractmethod
     def initialize(self):
-        """ Intializes this method type so that it is ready to use afterwards.
-            Note that any resources that would prevent other method types from succesfully
+        """ Initializes this method so that it is ready to use afterwards.
+            Note that any resources that would prevent other method types from successfully
             executing should be acquired in @allocateResources."""
         pass
 
     @abc.abstractmethod
-    def allocateResources(self):
+    def allocateResources(self, roles=None):
         """ Allocates all resources that are required to run this method but can interfere
             with other method types if loaded. This should be the same resources as they are
-            released in @releaseResources. """
+            released in @releaseResources.
+            @param roles - see getParameters(). If None, all the resources for all roles are allocated.
+        """
         pass
 
     @abc.abstractmethod
-    def releaseResources(self):
+    def releaseResources(self, roles=None):
         """ Releases all resources that may interfere with other method types.
-            This should be the same resources as the ones acquired in @allocateResources."""
+            This should be the same resources as the ones acquired in @allocateResources.
+            @param roles - see getParameters(). If None, the resources for all roles are released, else only
+                    for the roles specified.
+        """
         pass
 
     @abc.abstractmethod
@@ -70,25 +77,52 @@ class MethodType(object):
         """ Notifies the method type to destroy any allocated resources/ terminate any subprocesses. """
         pass
 
+    def getRoles(self):
+        """ Returns a list of all roles implemented by this method. """
+        parentClasses = [x.__name__ for x in self.__mro__]
+        roles = [x in parentClasses and x in METHOD_TYPES]
+        return roles
+
     @abc.abstractmethod
-    def getType(self):
-        """ Returns a string representing the type of this method. """
+    def hasResourceConflict(self, activeRoles):
+        """ Returns whether this method may have resource conflicts with any method in any of
+            the given roles. """
         pass
 
     @abc.abstractmethod
-    def hasResourceConflict(self, otherMethod):
-        """ Returns whether this method type may have resource conflicts with the given method. """
+    def supportsBatchProcessing(self):
+        """ Returns whether this method supports batch processing. If a method implements multiple
+            different method types (e.g. ArmPlanner and GraspPlanner) this method can be queried to
+            process multiple planning/control requests at once rather than in sequence. For instance,
+            if a method provides integrated grasp and motion planning, it is desirable to process
+            the inputs for both roles at once rather than in sequence. This allows the method to tackle
+            both problems at the same time instead of sequentially (i.e. plan the grasp such that it can
+            move the arm to the location).
+            If a method supports batch processing, it must support this for any sequence of its roles.
+        """
         pass
 
+    def executeBatch(self, startContext, batchInput, parameters):
+        """ If this method supports batch processing, this function executes a whole batch of tasks.
+            @param TODO startContext
+            @param batchInput - a list of tuples (role_name, role_input), where role_name is the name of
+            the role (e.g. ArmPlanner, GraspController), and role_input is a dictionary of inputs for
+            that respective role. Each input is stored under the same key as the respective function
+            argument.
+            @param TODO parameters
+            @return - an ordered list that contains for each task a tuple (success, result).
+        """
 
-class ArmPlanner(MethodType):
+
+class ArmPlanner(object):
     """ Plans an arm trajectory to a specified goal. """
     # @abc.abstractmethod
     # def preparePlanning(self, context):
     #     pass
+    STRING_REPRESENTATION = 'ArmPlanner'
 
     @abc.abstractmethod
-    def plan(self, goal, context, paramPrefix, parameters):
+    def planArmTrajectory(self, goal, context, paramPrefix, parameters):
         """
             Plans an arm trajectory to the given goal.
             @param goal - can either be a configuration, a pose or a position
@@ -99,18 +133,13 @@ class ArmPlanner(MethodType):
         """
         pass
 
-    def getType(self):
-        return 'ArmPlanner'
 
-    def hasResourceConflict(self, otherMethod):
-        return False
-
-
-class ArmController(MethodType):
+class ArmController(object):
     """ Executes a given arm trajectory. """
+    STRING_REPRESENTATION = 'ArmController'
 
     @abc.abstractmethod
-    def execute(self, trajectory, context, paramPrefix, parameters):
+    def executeArmTrajectory(self, trajectory, context, paramPrefix, parameters):
         """
             Executes the given trajectory.
             @param trajectory - of type Trajectory
@@ -121,21 +150,19 @@ class ArmController(MethodType):
         """
         pass
 
-    def getType(self):
-        return 'ArmController'
-
-    def hasResourceConflict(self, otherMethod):
-        return otherMethod.getType() == 'COMController' \
-               or otherMethod.getType() == 'ToolUseController' \
-               or otherMethod.getType() == 'GraspController' \
-               or otherMethod.getType() == 'PlaceController'
+    # def hasResourceConflict(self, otherMethod):
+    #     return otherMethod.getType() == 'COMController' \
+    #            or otherMethod.getType() == 'ToolUseController' \
+    #            or otherMethod.getType() == 'GraspController' \
+    #            or otherMethod.getType() == 'PlaceController'
 
 
-class GraspPlanner(MethodType):
+class GraspPlanner(object):
     """ Plans a grasp for a given object. """
+    STRING_REPRESENTATION = 'GraspPlanner'
 
     @abc.abstractmethod
-    def plan(self, object, context, paramPrefix, parameters):
+    def planGrasp(self, object, context, paramPrefix, parameters):
         """
             Plans a grasp for the given object.
             @param object - object information containing the pose and the name of the object.
@@ -146,18 +173,13 @@ class GraspPlanner(MethodType):
         """
         pass
 
-    def getType(self):
-        return 'GraspPlanner'
 
-    def hasResourceConflict(self, otherMethod):
-        return False
-
-
-class GraspController(MethodType):
+class GraspController(object):
     """ Executes a grasp and controls the robot hand while an object is grasped. """
+    STRING_REPRESENTATION = 'GraspController'
 
     @abc.abstractmethod
-    def startExecution(self, grasp, context, paramPrefix, parameters):
+    def startGraspExecution(self, grasp, context, paramPrefix, parameters):
         """
             Starts executing the given grasp. This function is only blocking until the grasp
             is established. The controller may continue running (e.g. for adaptive grasping)
@@ -171,7 +193,7 @@ class GraspController(MethodType):
         pass
 
     @abc.abstractmethod
-    def stopExecution(self):
+    def stopGraspExecution(self):
         """
             Stops the execution of the grasp controller. Note, that the gripper should remain
             stiff after this call, as a grasped object may be dropped otherwise. The purpose of
@@ -181,113 +203,89 @@ class GraspController(MethodType):
         """
         pass
 
-    def getType(self):
-        return 'GraspController'
-
-    def hasResourceConflict(self, otherMethod):
-            return otherMethod.getType() == 'COMController' \
-                   or otherMethod.getType() == 'ToolUseController' \
-                   or otherMethod.getType() == 'GraspController' \
-                   or otherMethod.getType() == 'PlaceController'
+    # def hasResourceConflict(self, otherMethod):
+    #         return otherMethod.getType() == 'COMController' \
+    #                or otherMethod.getType() == 'ToolUseController' \
+    #                or otherMethod.getType() == 'GraspController' \
+    #                or otherMethod.getType() == 'PlaceController'
 
 
-class PlacePlanner(MethodType):
+class PlacePlanner(object):
     """ Plans to place an object. """
+    STRING_REPRESENTATION = 'PlacePlanner'
 
     @abc.abstractmethod
-    def plan(self, placementInfo, context, paramPrefix, parameters):
+    def planPlacement(self, placementInfo, context, paramPrefix, parameters):
         # TODO
         pass
 
-    def getType(self):
-        return 'PlacePlanner'
 
-    def hasResourceConflict(self, otherMethod):
-        return False
-
-
-class PlaceController(MethodType):
+class PlaceController(object):
     """ Executes the placement of an object. """
+    STRING_REPRESENTATION = 'PlaceController'
 
     @abc.abstractmethod
-    def execute(self, trajectory, context, paramPrefix, parameters):
+    def executePlacement(self, trajectory, context, paramPrefix, parameters):
         # TODO
         pass
 
-    def getType(self):
-        return 'PlaceController'
-
-    def hasResourceConflict(self, otherMethod):
-        return otherMethod.getType() == 'COMController' \
-               or otherMethod.getType() == 'ToolUseController' \
-               or otherMethod.getType() == 'GraspController' \
-               or otherMethod.getType() == 'PlaceController'
+    # def hasResourceConflict(self, otherMethod):
+    #     return otherMethod.getType() == 'COMController' \
+    #            or otherMethod.getType() == 'ToolUseController' \
+    #            or otherMethod.getType() == 'GraspController' \
+    #            or otherMethod.getType() == 'PlaceController'
 
 
-class COMPlanner(MethodType):
+class COMPlanner(object):
     """ Plans to manipulate a constrained object (e.g. a door handle). """
+    STRING_REPRESENTATION = 'COMPlanner'
 
     @abc.abstractmethod
-    def plan(self):
+    def planCOM(self):
         # TODO
         pass
 
-    def getType(self):
-        return 'COMPlanner'
 
-    def hasResourceConflict(self, otherMethod):
-        return False
-
-
-class COMController(MethodType):
+class COMController(object):
     """ Executes the manipulation planned by a COMPlanner. """
+    STRING_REPRESENTATION = 'COMController'
 
     @abc.abstractmethod
-    def execute(self):
+    def executeCOM(self):
         # TODO
         pass
 
-    def getType(self):
-        return 'COMController'
-
-    def hasResourceConflict(self, otherMethod):
-        return otherMethod.getType() == 'COMController' \
-               or otherMethod.getType() == 'ToolUseController' \
-               or otherMethod.getType() == 'GraspController' \
-               or otherMethod.getType() == 'PlaceController'
+    # def hasResourceConflict(self, otherMethod):
+    #     return otherMethod.getType() == 'COMController' \
+    #            or otherMethod.getType() == 'ToolUseController' \
+    #            or otherMethod.getType() == 'GraspController' \
+    #            or otherMethod.getType() == 'PlaceController'
 
 
-class ToolUsePlanner(MethodType):
+class ToolUsePlanner(object):
     """ Plans to use a tool. """
+    STRING_REPRESENTATION = 'ToolUsePlanner'
 
     @abc.abstractmethod
-    def plan(self):
+    def planToolUse(self):
         # TODO
         pass
 
-    def getType(self):
-        return 'ToolUsePlanner'
 
-    def hasResourceConflict(self, otherMethod):
-        return False
-
-
-class ToolUseController(MethodType):
+class ToolUseController(object):
     """ Executes a trajectory planned by a ToolUsePlanner. """
+    STRING_REPRESENTATION = 'ToolUseController'
 
     @abc.abstractmethod
-    def execute(self):
+    def executeToolUse(self):
         # TODO
         pass
 
-    def getType(self):
-        return 'ToolUseController'
-
-    def hasResourceConflict(self, otherMethod):
-        return otherMethod.getType() == 'COMController' \
-               or otherMethod.getType() == 'ToolUseController' \
-               or otherMethod.getType() == 'GraspController' \
-               or otherMethod.getType() == 'PlaceController'
+    # def hasResourceConflict(self, otherMethod):
+    #     return otherMethod.getType() == 'COMController' \
+    #            or otherMethod.getType() == 'ToolUseController' \
+    #            or otherMethod.getType() == 'GraspController' \
+    #            or otherMethod.getType() == 'PlaceController'
 
 
 class GraspResult(object):
@@ -346,3 +344,14 @@ class Trajectory(object):
             Note that there is sanity check performed to ensure the timestamp makes sense.
         """
         self.waypoints.append(waypoint)
+
+METHOD_TYPES_STRING = [ArmPlanner.STRING_REPRESENTATION,
+                       ArmController.STRING_REPRESENTATION,
+                       GraspPlanner.STRING_REPRESENTATION,
+                       GraspController.STRING_REPRESENTATION,
+                       PlacePlanner.STRING_REPRESENTATION,
+                       PlaceController.STRING_REPRESENTATION,
+                       COMPlanner.STRING_REPRESENTATION,
+                       COMController.STRING_REPRESENTATION,
+                       ToolUsePlanner.STRING_REPRESENTATION,
+                       ToolUseController.STRING_REPRESENTATION]
