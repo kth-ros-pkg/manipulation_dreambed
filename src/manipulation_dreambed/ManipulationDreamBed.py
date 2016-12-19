@@ -495,6 +495,7 @@ class ManipulationDreamBed(object):
             batch.setResult(idx, bSuccess=bSuccess, result=result)
             idx += 1
             bAllSuccess = bAllSuccess and bSuccess
+            #TODO if a grasp controller is successful, we need to to save it here as running controller
 
         # Return success if we have a success for all batch elements
         bAllSuccess = bAllSuccess and idx == batch.getBatchSize() - 1
@@ -556,32 +557,32 @@ class ManipulationDreamBed(object):
             # TODO add constraints (orientation and approach vector)
             goal = graspResult.position
 
-        solution = planner.plan(goal=goal, context=self.context, paramPrefix=paramPrefix, parameters=parameters)
+        solution = planner.planArmTrajectory(goal=goal, context=self.context, paramPrefix=paramPrefix, parameters=parameters)
         return solution
 
     def _executeArmController(self, controller, inputs, paramPrefix, parameters, traj):
         if traj is None or not isinstance(traj, Trajectory):
             raise ValueError('Attempting to execute an arm controller, but no trajectory given, instead: %s' % traj)
-        success = controller.execute(trajectory=traj, context=self.context,
+        success = controller.executeArmTrajectory(trajectory=traj, context=self.context,
                                      paramPrefix=paramPrefix, parameters=parameters)
         return success
 
     def _executeGraspPlanner(self, planner, inputs, paramPrefix, parameters):
-        graspResult = planner.plan(object=inputs['objectName'], context=self.context, paramPrefix=paramPrefix,
+        graspResult = planner.planGrasp(object=inputs['objectName'], context=self.context, paramPrefix=paramPrefix,
                                    parameters=parameters)
         return graspResult
 
     def _executeGraspController(self, controller, inputs, paramPrefix, parameters, graspResult):
         self._stopGraspController()
-        success = controller.startExecution(grasp=graspResult, context=self.context, paramPrefix=paramPrefix,
-                                            parameters=parameters)
+        success = controller.startGraspExecution(grasp=graspResult, context=self.context, paramPrefix=paramPrefix,
+                                                 parameters=parameters)
         if success:
             self._runningGraspController = controller
         return success
 
     def _stopGraspController(self):
         if self._runningGraspController is not None:
-            success = self._runningGraspController.stopExecution()
+            success = self._runningGraspController.stopGraspExecution()
             if not success:
                 raise RuntimeError('Could not stop previously started grasp controller.')
             self._runningGraspController = None

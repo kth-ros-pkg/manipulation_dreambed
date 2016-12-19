@@ -102,6 +102,7 @@ class PortfolioMethod(object):
         """
         pass
 
+    @abc.abstractmethod
     def executeBatch(self, startContext, batchInput, parameters):
         """ If this method supports batch processing, this function executes a whole batch of tasks.
             @param TODO startContext
@@ -118,6 +119,7 @@ class PortfolioMethod(object):
 
 class ArmPlanner(object):
     """ Plans an arm trajectory to a specified goal. """
+    __metaclass__ = abc.ABCMeta
     # @abc.abstractmethod
     # def preparePlanning(self, context):
     #     pass
@@ -138,6 +140,7 @@ class ArmPlanner(object):
 
 class ArmController(object):
     """ Executes a given arm trajectory. """
+    __metaclass__ = abc.ABCMeta
     STRING_REPRESENTATION = 'ArmController'
 
     @abc.abstractmethod
@@ -161,6 +164,7 @@ class ArmController(object):
 
 class GraspPlanner(object):
     """ Plans a grasp for a given object. """
+    __metaclass__ = abc.ABCMeta
     STRING_REPRESENTATION = 'GraspPlanner'
 
     @abc.abstractmethod
@@ -178,6 +182,7 @@ class GraspPlanner(object):
 
 class GraspController(object):
     """ Executes a grasp and controls the robot hand while an object is grasped. """
+    __metaclass__ = abc.ABCMeta
     STRING_REPRESENTATION = 'GraspController'
 
     @abc.abstractmethod
@@ -214,6 +219,7 @@ class GraspController(object):
 
 class PlacePlanner(object):
     """ Plans to place an object. """
+    __metaclass__ = abc.ABCMeta
     STRING_REPRESENTATION = 'PlacePlanner'
 
     @abc.abstractmethod
@@ -224,6 +230,7 @@ class PlacePlanner(object):
 
 class PlaceController(object):
     """ Executes the placement of an object. """
+    __metaclass__ = abc.ABCMeta
     STRING_REPRESENTATION = 'PlaceController'
 
     @abc.abstractmethod
@@ -240,6 +247,7 @@ class PlaceController(object):
 
 class COMPlanner(object):
     """ Plans to manipulate a constrained object (e.g. a door handle). """
+    __metaclass__ = abc.ABCMeta
     STRING_REPRESENTATION = 'COMPlanner'
 
     @abc.abstractmethod
@@ -250,6 +258,7 @@ class COMPlanner(object):
 
 class COMController(object):
     """ Executes the manipulation planned by a COMPlanner. """
+    __metaclass__ = abc.ABCMeta
     STRING_REPRESENTATION = 'COMController'
 
     @abc.abstractmethod
@@ -266,6 +275,7 @@ class COMController(object):
 
 class ToolUsePlanner(object):
     """ Plans to use a tool. """
+    __metaclass__ = abc.ABCMeta
     STRING_REPRESENTATION = 'ToolUsePlanner'
 
     @abc.abstractmethod
@@ -276,6 +286,7 @@ class ToolUsePlanner(object):
 
 class ToolUseController(object):
     """ Executes a trajectory planned by a ToolUsePlanner. """
+    __metaclass__ = abc.ABCMeta
     STRING_REPRESENTATION = 'ToolUseController'
 
     @abc.abstractmethod
