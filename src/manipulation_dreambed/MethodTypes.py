@@ -112,6 +112,8 @@ class PortfolioMethod(object):
             @param TODO parameters
             @return - an ordered list that contains for each task a tuple (success, result).
         """
+        raise NotImplementedError('executeBatch-function of root class MethodType was called: You need to override this' + \
+                                  ' function, if your method type supports batch processing.')
 
 
 class ArmPlanner(object):

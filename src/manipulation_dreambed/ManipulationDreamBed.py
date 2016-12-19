@@ -313,15 +313,15 @@ class ManipulationDreamBed(object):
         # Initialize some variables
         numExecutedMethods = 0
         success = True
-        prevMethodName = None
         # Run over task and execute methods with their respective parameters
         # and collect performance measures
         while numExecutedMethods < len(methods) and success:
             self._logger.logdebug('Running method ' + str(numExecutedMethods))
             batch = None # set batch to None so we don't execute an old batch again
-            currentMethod = methods[numExecutedMethods]
-            # Check whether we are using a new method and whether it supports batch processing
-            if prevMethodName != currentMethod.getName() and currentMethod.supportsBatchProcessing():
+            currentMethodDesc = methods[numExecutedMethods]
+            currentMethod = self.methodPortfolio[currentMethodDesc.type][currentMethodDesc.method_choice]
+            # Check whether we are using a method that supports batch processing
+            if currentMethod.supportsBatchProcessing():
                 # in this case create a batch and execute it as batch
                 batch = self._assembleBatch(methods[numExecutedMethods:])
             if batch is not None:
@@ -330,10 +330,10 @@ class ManipulationDreamBed(object):
                 numExecutedMethods += batch.getBatchSize()
             else:
                 # Execute the current method and pass it the result of the previous method
-                (success, result) = self._executeMethod(currentMethod, kwargs)
+                (success, result) = self._executeMethod(currentMethodDesc, kwargs)
                 numExecutedMethods += 1
             if not success:
-                failedMethods = [currentMethod]
+                failedMethods = [currentMethodDesc]
                 if batch is not None:
                     failedMethods = batch.getFailedMethods()
                 for failedMethod in failedMethods:
@@ -349,7 +349,7 @@ class ManipulationDreamBed(object):
                         success = True
             else:
                 self.simulator.getWorldState(self.context.getSceneInformation())
-                successfulMethods = [currentMethod]
+                successfulMethods = [currentMethodDesc]
                 if batch is not None:
                     successfulMethods = batch.getMethodDescriptions()
                 for successfulMethod in successfulMethods:
@@ -501,12 +501,15 @@ class ManipulationDreamBed(object):
         return (bAllSuccess, results[-1][1]) # the result is the result of the last batch element
 
     def _executeMethod(self, currentMethodDesc, parameters):
-        self._logger.loginfo('Executing method ' + str(currentMethodDesc))
+        self._logger.loginfo('Executing method ' + currentMethodDesc.method_choice)
         # get the instance of the selected method
         method = self.methodPortfolio[currentMethodDesc.type][currentMethodDesc.method_choice]
         self._resolveResourceAllocationConflicts(method, [currentMethodDesc.type])
         inputs = currentMethodDesc.inputs
-        previousResult = currentMethodDesc.supplyMethodDesc.result
+        if currentMethodDesc.supplyMethodDesc is not None:
+            previousResult = currentMethodDesc.supplyMethodDesc.result
+        else:
+            previousResult = None
         # It is possible that the previous method failed and we do not have a previous result.
         # If this method is a controller it always needs a result, hence we can just abort if
         # we don't have a previous result.
