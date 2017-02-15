@@ -2,14 +2,19 @@ from geometry_msgs.msg import Pose as ROSPose
 from geometry_msgs.msg import PoseStamped as ROSPoseStamped
 from std_msgs.msg import Header
 from Context import Pose as ContextPose
+from Context import ConfigurationWrapper as ContextConfiguration
+from MethodTypes import Trajectory as ContextTrajectory
+from MethodTypes import Waypoint as ContextWaypoint
 from geometry_msgs.msg import Vector3
 from geometry_msgs.msg import Quaternion
 from rospkg import RosPack
+from trajectory_msgs.msg import JointTrajectory, JointTrajectoryPoint
+from sensor_msgs.msg import JointState
 import rospy
 import numpy
 
 
-def contextPoseToROSPose(cPose, bStamped=False, frame_id='/world'):
+def toROSPose(cPose, bStamped=False):
     pos = Vector3()
     pos.x = cPose.position[0]
     pos.y = cPose.position[1]
@@ -22,16 +27,19 @@ def contextPoseToROSPose(cPose, bStamped=False, frame_id='/world'):
     quat.w = cPose.orientation[3]
     pose = ROSPose(position=pos, orientation=quat)
     if bStamped:
-        header = Header(stamp=rospy.Time.now(), frame_id=frame_id)
+        header = Header(stamp=rospy.Time.now(), frame_id=cPose.frame)
         pose = ROSPoseStamped(pose=pose, header=header)
     return pose
 
 
-def rosPoseToContextPose(rosPose):
+def toContextPose(rosPose, frame='world'):
+    if type(rosPose) is ROSPoseStamped:
+        frame = rosPose.header.frame_id
+        rosPose = rosPose.pose
     position = numpy.array([rosPose.position.x, rosPose.position.y, rosPose.position.z])
     orientation = numpy.array([rosPose.orientation.x, rosPose.orientation.y,
                               rosPose.orientation.z, rosPose.orientation.w])
-    return ContextPose(position=position, orientation=orientation)
+    return ContextPose(position=position, orientation=orientation, frame=frame)
 
 
 def resolvePath(path):
@@ -55,3 +63,64 @@ def resolvePath(path):
         path = prefix + package_path + postfix
         firstOccurrence = path.find(package_key_word)
     return path
+
+
+def toROSTrajectory(trajectory):
+    points = []
+    for wp in trajectory.waypoints:
+        time_stamp = rospy.Duration(secs=wp.timestamp[0], nsecs=wp.timestamp[1])
+        jtp = JointTrajectoryPoint(positions=wp.positions, velocities=wp.velocities,
+                                   accelerations=wp.accelerations, time_from_start=time_stamp)
+        points.append(jtp)
+    joint_traj = JointTrajectory(joint_names=trajectory.joint_names, points=points)
+    return joint_traj
+
+
+def toContextTrajectory(ros_trajectory):
+    context_trajectory = ContextTrajectory(group_name='', joint_names=ros_trajectory.joint_names)
+    for wp in ros_trajectory.points:
+        context_waypoint = ContextWaypoint(timestamp=(wp.time_from_start.secs, wp.time_from_start.nsecs),
+                                           positions=wp.positions, velocities=wp.velocities,
+                                           accelerations=wp.accelerations)
+        context_trajectory.appendWaypoint(context_waypoint)
+    return context_trajectory
+
+
+def toJointState(configuration):
+    joint_state = JointState()
+    joint_state.header.frame_id = ''
+    joint_state.header.stamp = rospy.Time.now()
+    joint_state.name = configuration.keys()
+    joint_state.position = configuration.values()
+    return joint_state
+
+
+def toContextConfiguration(joint_state):
+    config = dict(zip(joint_state.name, joint_state.position))
+    return config
+
+
+def extract_part_trajectory(joint_names, trajectory):
+    """
+    Returns a copy of the given trajectory that is reduced to the given set of joints.
+    :param joint_names: list of joints to keep.
+    :param trajectory: input trajectory
+    :return: a copy of the input trajectory that only contains the joints defined in joint_names
+    """
+    output_traj = JointTrajectory()
+    output_traj.header = trajectory.header
+    indices = []
+    num_joints = len(trajectory.joint_names)
+    for name_idx in range(num_joints):
+        if trajectory.joint_names[name_idx] in joint_names:
+            indices.append(name_idx)
+    output_traj.joint_names = [trajectory.joint_names[i] for i in range(num_joints) if i in indices]
+    for point in trajectory.points:
+        new_point = JointTrajectoryPoint()
+        new_point.positions = [point.positions[i] for i in range(len(point.positions)) if i in indices]
+        new_point.velocities = [point.velocities[i] for i in range(len(point.velocities)) if i in indices]
+        new_point.accelerations = [point.accelerations[i] for i in range(len(point.accelerations)) if i in indices]
+        new_point.time_from_start = point.time_from_start
+        output_traj.points.append(new_point)
+    return output_traj
+

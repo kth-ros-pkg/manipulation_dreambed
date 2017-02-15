@@ -428,9 +428,9 @@ class ManipulationDreamBed(object):
             raise err
 
     def _createMethod(self, methodDesc):
-        new_module = importlib.import_module(methodDesc['module'], methodDesc['package'])
+        new_module = importlib.import_module('.' + methodDesc['module'], methodDesc['package'])
         method_class = new_module.__getattribute__(methodDesc['class'])
-        method_instance = method_class(methodDesc['parameters'])
+        method_instance = method_class(**methodDesc['parameters'])
         types = methodDesc['types'].split(';')
         self._logger.loginfo('ManipulationDreamBed: Created method %s' % method_instance.getName())
         for t in types:

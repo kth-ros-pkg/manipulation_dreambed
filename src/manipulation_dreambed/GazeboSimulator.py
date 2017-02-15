@@ -192,7 +192,7 @@ class GazeboSimulatorWrapper(Simulator):
     def _sendModelState(self, modelInfo, frameName):
         # first reset all wrenches
         self._clearBodyWrenchesService(modelInfo.name)
-        mstate = ModelState(pose=ROSUtils.contextPoseToROSPose(modelInfo.pose),
+        mstate = ModelState(pose=ROSUtils.toROSPose(modelInfo.pose),
                             model_name=modelInfo.name, reference_frame=frameName)
         result = self._setModelStateService(mstate)
         if not result.success:
@@ -204,7 +204,7 @@ class GazeboSimulatorWrapper(Simulator):
         if not mstate.success:
             raise RuntimeError('Could not receive model state of model %s. The error message is: %s' %
                                (modelInfo.name, mstate.status_message))
-        modelInfo.pose = ROSUtils.rosPoseToContextPose(mstate.pose)
+        modelInfo.pose = ROSUtils.toContextPose(mstate.pose)
 
     def _synchModels(self, sceneInfo, scene2Gazebo=True):
         """
@@ -251,7 +251,7 @@ class GazeboSimulatorWrapper(Simulator):
         if model_xml == "":
             f.close()
             raise IOError('The given model %s is empty.' % modelPath)
-        pose = ROSUtils.contextPoseToROSPose(objectInfo.pose)
+        pose = ROSUtils.toROSPose(objectInfo.pose)
         result = self._spawnModelService(model_name=missingModel, model_xml=model_xml, robot_namespace=rospy.get_namespace(),
                                          initial_pose=pose, reference_frame=sceneInfo.frameName)
         f.close()

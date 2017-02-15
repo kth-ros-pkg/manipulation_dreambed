@@ -356,7 +356,7 @@ class Trajectory(object):
 
     def appendWaypoint(self, waypoint):
         """ Appends the given waypoint to the trajectory.
-            Note that there is sanity check performed to ensure the timestamp makes sense.
+            Note that there is no sanity check performed to ensure the timestamp makes sense.
         """
         self.waypoints.append(waypoint)
 

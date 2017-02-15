@@ -22,7 +22,7 @@ class Task(yaml.YAMLObject):
         return "%s(actions=%s)" % (self.__class__.__name__, self.actions)
 
 
-class GraspReference(object):
+class GraspReference(yaml.YAMLObject):
     yaml_tag = u'!GraspReference'
 
     def __init__(self, graspActionName):
@@ -181,7 +181,7 @@ def placeFactory(loader, node):
     return PlaceAction(**fields)
 
 def graspFactory(loader, node):
-    field = loader.construct_mapping(node)
+    fields = loader.construct_mapping(node)
     return GraspAction(**fields)
 
 def moveArmFactory(loader, node):

@@ -69,6 +69,8 @@ if __name__ == "__main__":
     # Create optimizer.
     rospy.loginfo('ROSManipulationOptimizer: Creating optimizer...')
     manipOptimizer = ManipulationOptimizer(dreamBed)
+    import IPython
+    IPython.embed()
     # Do the job, optimize!
     rospy.loginfo('ROSManipulationOptimizer: Starting optimizer...')
     optimalSolution = manipOptimizer.run()

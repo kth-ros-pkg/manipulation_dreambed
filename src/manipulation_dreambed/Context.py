@@ -56,12 +56,15 @@ class PositionWrapper(yaml.YAMLObject):
 class Pose(yaml.YAMLObject):
     yaml_tag = u'!Pose'
 
-    def __init__(self, position=numpy.array([0.0, 0.0, 0.0]), orientation=numpy.array([0.0, 0.0, 0.0, 1.0])):
+    def __init__(self, position=numpy.array([0.0, 0.0, 0.0]),
+                 orientation=numpy.array([0.0, 0.0, 0.0, 1.0]),
+                 frame='world'):
         self.position = position
         self.orientation = orientation
+        self.frame = frame
 
     def __repr__(self):
-        return "%s(position=%r, orientation=%r)" % (self.__class__.__name__, self.position, self.orientation)
+        return "%s(position=%r, orientation=%r, frame=%r)" % (self.__class__.__name__, self.position, self.orientation, self.frame)
 
 
 class RobotInformation(yaml.YAMLObject):
@@ -98,7 +101,7 @@ class ObjectInformation(yaml.YAMLObject):
 
 
 class SceneInformation(object):
-    """ Stores """
+    """ Stores information about the scene"""
     def __init__(self, sceneDescriptionFile):
         self.robot = None
         self.objects = []
