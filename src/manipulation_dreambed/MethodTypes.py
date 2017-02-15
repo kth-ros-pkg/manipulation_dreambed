@@ -7,8 +7,6 @@
 import abc
 
 
-
-
 class PortfolioMethod(object):
     """ Abstract super class of each method. """
     __metaclass__ = abc.ABCMeta
@@ -303,10 +301,10 @@ class ToolUseController(object):
 
 class GraspResult(object):
 
-    def __init__(self, grasp_position, approach_vector, orientation):
-        self.grasp_position = grasp_position
+    def __init__(self, grasp_pose, approach_vector, hand_configuration):
+        self.grasp_pose = grasp_pose
         self.approach_vector = approach_vector
-        self.orientation = orientation
+        self.hand_configuration = hand_configuration
 
 
 class Waypoint(object):
@@ -351,6 +349,10 @@ class Trajectory(object):
             distWp = reduce(lambda x, y: x + y * y, deltaWp)
             totalDist += distWp
         return totalDist
+
+    def getTotalDuration(self):
+        """ Returns the total duration of this trajectory"""
+        return self.waypoints[-1].timestamp[0] + self.waypoints[-1].timestamp[1] * 10e9
 
     def appendWaypoint(self, waypoint):
         """ Appends the given waypoint to the trajectory.

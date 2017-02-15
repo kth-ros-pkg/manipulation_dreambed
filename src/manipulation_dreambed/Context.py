@@ -83,8 +83,11 @@ class ObjectInformation(yaml.YAMLObject):
     """ Stores information about an object in the scene. """
     yaml_tag = u'!Object'
 
-    def __init__(self, name, pose):
+    def __init__(self, name, pose, object_class=None):
         self.name = name
+        if object_class is None:
+            object_class = name
+        self.object_class = object_class
         # self.modelFile = modelFile
         self.pose = pose
 
