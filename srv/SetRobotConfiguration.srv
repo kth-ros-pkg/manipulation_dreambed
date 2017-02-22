@@ -1,0 +1,5 @@
+# request
+sensor_msgs/JointState configuration
+---
+# response
+bool success

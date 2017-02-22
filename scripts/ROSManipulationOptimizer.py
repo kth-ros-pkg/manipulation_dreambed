@@ -13,10 +13,10 @@
 import rospy
 import sys
 import argparse
-import pysmac
 from manipulation_dreambed.ManipulationOptimizer import ManipulationOptimizer
 from manipulation_dreambed.ManipulationDreamBed import ManipulationDreamBed, Logger
 from manipulation_dreambed.GazeboSimulator import GazeboSimulatorWrapper
+import manipulation_dreambed.DummySimulator as DummySimulator
 from manipulation_dreambed.Context import Context
 
 
@@ -34,12 +34,31 @@ class ROSLogger(Logger):
         rospy.logdebug(message)
 
 
+def debugFunction(dreamBed, context):
+    arm_planners = dreamBed.methodPortfolio['ArmPlanner']
+    arm_controllers = dreamBed.methodPortfolio['ArmController']
+    grasp_planners = dreamBed.methodPortfolio['GraspPlanner']
+    grasp_controllers= dreamBed.methodPortfolio['GraspController']
+    from manipulation_dreambed.Context import Pose
+    import numpy
+    birrt = arm_planners['BiRRTMotionPlanner']
+    # simple_arm_controller = arm_controllers['SimpleArmController']
+    integrated_method = arm_planners['IntegratedHFTSPlanner']
+    hfts_planner = grasp_planners['HFTSGraspPlanner']
+    # simple_grasp_controller = grasp_controllers['SimpleGraspController']
+    goal1 = Pose(numpy.array([0.0, 0.7, 1.6]))
+    goal2 = Pose(numpy.array([0.2, 0.7, 1.8]))
+    simulator = dreamBed.simulator
+    import IPython
+    IPython.embed()
+
 if __name__ == "__main__":
     rospy.init_node('manipulation_optimizer_node')
     argv = rospy.myargv(argv=sys.argv)
     parser = argparse.ArgumentParser(description='Script to test the manipulation dream bed.')
     parser.add_argument('--gzModelPathsFile', nargs='?', default='../data/gazebo_model_paths.yaml',
                         help='Path to gazebo object models.')
+    parser.add_argument('--nosim', dest='nosim', action='store_true')
     parser.add_argument('--portfolio', nargs='?', default='../data/portfolio.yaml',
                         help='File that contains information about the method portfolio')
     parser.add_argument('--scene', nargs='?', default='../data/shelfWorld.yaml',
@@ -57,25 +76,30 @@ if __name__ == "__main__":
     context = Context()
     context.readSceneDescription(args.scene)
     context.readTask(args.task)
+    logger = ROSLogger()
     # Set up simulator.
     rospy.loginfo('ROSManipulationOptimizer: Setting up simulator...')
-    simulator = GazeboSimulatorWrapper(args.gzModelPathsFile)
+    if args.nosim:
+        simulator = DummySimulator.getSimulatorInstance(logger)
+        additional_portfolio_methods = [DummySimulator.getControllerInstance()]
+    else:
+        simulator = GazeboSimulatorWrapper(args.gzModelPathsFile)
+        additional_portfolio_methods = None
     # Set up dreambed.
     rospy.loginfo('ROSManipulationOptimizer: Setting up dreambed...')
-    dreamBed = ManipulationDreamBed(simulator, portfolioDescription, logFileName=args.log, logger=ROSLogger())
-    dreamBed.init()
+    dreamBed = ManipulationDreamBed(simulator, portfolioDescription,
+                                    numAveragingSteps=5, logFileName=args.log,
+                                    logger=logger)
+    dreamBed.init(additional_portfolio_methods)
     rospy.loginfo('ROSManipulationOptimizer: Setting context...')
     dreamBed.setContext(context)
     # Create optimizer.
     rospy.loginfo('ROSManipulationOptimizer: Creating optimizer...')
     manipOptimizer = ManipulationOptimizer(dreamBed)
-    import IPython
-    IPython.embed()
     # Do the job, optimize!
     rospy.loginfo('ROSManipulationOptimizer: Starting optimizer...')
-    optimalSolution = manipOptimizer.run()
-    # import IPython
-    # IPython.embed()
+    optimalSolution = manipOptimizer.run(deterministic=True)
+    # debugFunction(dreamBed, context)
     # Done, clean up.
     rospy.loginfo('ROSManipulationOptimizer: Optimization finished. Terminating.')
     dreamBed.destroy()

@@ -77,8 +77,8 @@ class PortfolioMethod(object):
 
     def getRoles(self):
         """ Returns a list of all roles implemented by this method. """
-        parentClasses = [x.__name__ for x in self.__mro__]
-        roles = [x in parentClasses and x in METHOD_TYPES]
+        parentClasses = [x.__name__ for x in self.__class__.__mro__]
+        roles = [x for x in parentClasses if x in METHOD_TYPES_STRING]
         return roles
 
     @abc.abstractmethod
@@ -301,10 +301,11 @@ class ToolUseController(object):
 
 class GraspResult(object):
 
-    def __init__(self, grasp_pose, approach_vector, hand_configuration):
+    def __init__(self, grasp_pose, approach_vector, hand_configuration, grasped_object=None):
         self.grasp_pose = grasp_pose
         self.approach_vector = approach_vector
         self.hand_configuration = hand_configuration
+        self.grasped_object = grasped_object
 
 
 class Waypoint(object):

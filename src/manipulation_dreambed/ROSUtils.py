@@ -86,13 +86,27 @@ def toContextTrajectory(ros_trajectory):
     return context_trajectory
 
 
-def toJointState(configuration):
+def toJointState(configuration, names=None):
+    if names is None:
+        names = configuration.keys()
     joint_state = JointState()
     joint_state.header.frame_id = ''
     joint_state.header.stamp = rospy.Time.now()
-    joint_state.name = configuration.keys()
-    joint_state.position = configuration.values()
+    joint_state.name = names
+    joint_state.position = [configuration[name] for name in names]
     return joint_state
+
+
+def extractPartialJointState(joint_state, names):
+    new_joint_state = JointState()
+    indices = [i for i in range(len(joint_state.name)) if joint_state.name[i] in names]
+    new_joint_state.name = [joint_state.name[i] for i in indices]
+    new_joint_state.position = [joint_state.position[i] for i in indices]
+    if len(joint_state.velocity) > 0:
+        new_joint_state.velocity = [joint_state.velocity[i] for i in indices]
+    if len(joint_state.effort) > 0:
+        new_joint_state.effort = [joint_state.effort[i] for i in indices]
+    return new_joint_state
 
 
 def toContextConfiguration(joint_state):
@@ -123,4 +137,6 @@ def extract_part_trajectory(joint_names, trajectory):
         new_point.time_from_start = point.time_from_start
         output_traj.points.append(new_point)
     return output_traj
+
+
 

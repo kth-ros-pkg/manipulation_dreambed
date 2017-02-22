@@ -8,8 +8,7 @@
 from manipulation_dreambed.ManipulationDreamBed import Simulator
 from std_srvs.srv import Empty as EmptyService
 from std_srvs.srv import Trigger as TriggerService
-from std_msgs.msg import Empty as EmptyMessage
-from std_msgs.msg import Bool as BoolMessage
+from manipulation_dreambed.srv import GetRobotConfiguration, GetRobotConfigurationRequest, SetRobotConfiguration, SetRobotConfigurationRequest
 from gazebo_msgs.srv import SpawnModel, DeleteModel, GetWorldProperties, GetModelState, SetModelState
 from gazebo_msgs.srv import GetJointProperties, GetModelProperties, SetModelConfiguration, JointRequest, BodyRequest
 from gazebo_msgs.msg import ModelState
@@ -31,9 +30,13 @@ class RobotSimulator(object):
         return False
 
     @abc.abstractmethod
-    def reset(self):
-        """ Resets the robot simulator to its initial state. """
+    def setConfiguration(self, config):
+        """ Sets the robot simulator to the given configuration. """
         pass
+
+    @abc.abstractmethod
+    def getConfiguration(self):
+        """ Returns the current robot configuration as it is in the simulator. """
 
     @abc.abstractmethod
     def cleanUp(self):
@@ -46,10 +49,13 @@ class ROSRobotSimulator(RobotSimulator):
         commands through ROS services to a remote ROS node"""
     def __init__(self,
                  initServiceName='/robot_simulator/init_robot_simulator',
-                 resetServiceName='/robot_simulator/reset_robot_simulator',
+                 setConfigServiceName='/robot_simulator/set_configuration',
+                 getConfigServiceName='/robot_simulator/get_configuration',
                  cleanUpServiceName='/robot_simulator/cleanup_robot_simulator'):
-        self._serviceNames = (initServiceName, resetServiceName, cleanUpServiceName)
-        self._resetRobotService = None
+        self._serviceNames = (initServiceName, setConfigServiceName,
+                              getConfigServiceName, cleanUpServiceName)
+        self._setConfigService = None
+        self._getConfigService = None
         self._cleanUpService = None
         self._initService = None
 
@@ -57,14 +63,24 @@ class ROSRobotSimulator(RobotSimulator):
         rospy.wait_for_service(self._serviceNames[0])
         rospy.wait_for_service(self._serviceNames[1])
         rospy.wait_for_service(self._serviceNames[2])
+        rospy.wait_for_service(self._serviceNames[3])
         self._initService = rospy.ServiceProxy(self._serviceNames[0], TriggerService)
-        self._resetRobotService =rospy.ServiceProxy(self._serviceNames[1], EmptyService)
-        self._cleanUpService = rospy.ServiceProxy(self._serviceNames[2], EmptyService)
+        self._setConfigService = rospy.ServiceProxy(self._serviceNames[1], SetRobotConfiguration)
+        self._getConfigService = rospy.ServiceProxy(self._serviceNames[2], GetRobotConfiguration)
+        self._cleanUpService = rospy.ServiceProxy(self._serviceNames[3], EmptyService)
         initResult = self._initService()
         return initResult.success
 
-    def reset(self):
-        self._resetRobotService()
+    def setConfiguration(self, config):
+        request = SetRobotConfigurationRequest()
+        request.configuration = ROSUtils.toJointState(config)
+        response = self._setConfigService(request)
+        return response.success
+
+    def getConfiguration(self):
+        request = GetRobotConfigurationRequest()
+        response = self._getConfigService(request)
+        return ROSUtils.toContextConfiguration(response.configuration)
 
     def cleanUp(self):
         self._cleanUpService()
@@ -143,7 +159,7 @@ class GazeboSimulatorWrapper(Simulator):
 
     def setWorldState(self, sceneInfo):
         def setStuff():
-            self.reset()
+            # self.reset()
             self._synchModels(sceneInfo)
             # set object poses
             for obj in sceneInfo.objects:
@@ -168,26 +184,27 @@ class GazeboSimulatorWrapper(Simulator):
 
     def _sendRobotConfiguration(self, robot):
         config = robot.configuration
-        joints = config.keys()
-        jointValues = config.values()
+        success = self._robotSimulator.setConfiguration(config)
+        # joints = config.keys()
+        # jointValues = config.values()
         # first reset joint values:
-        for jointName in joints:
-            self._clearJointForcesService(jointName)
-        print joints, jointValues
-        result = self._setModelConfigurationService(model_name=robot.name, joint_names=joints, joint_positions=jointValues)
-        if not result.success:
-            raise RuntimeError('Could not send robot configuration. Message:%s' % result.status_message)
+        # for jointName in joints:
+        #     self._clearJointForcesService(jointName)
+        # result = self._setModelConfigurationService(model_name=robot.name, joint_names=joints, joint_positions=jointValues)
+        if not success:
+            raise RuntimeError('Could not set robot configuration.')
 
     def _receiveRobotConfiguration(self, robot):
-        properties = self._getModelPropertiesService(robot.name)
-        if not properties.success:
-            raise RuntimeError('Could not receive robot information from gazebo. Message:%s' % properties.status_message)
-        for joint in properties.joint_names:
-            jp = self._getJointPropertiesService(joint)
-            if not jp.success:
-                raise RuntimeError('Could not receive joint information for joint %s from gazebo. Message:%s' %
-                                   (joint, jp.status_message))
-            robot.configuration[joint] = jp.position[0]
+        robot.configuration = self._robotSimulator.getConfiguration()
+        # properties = self._getModelPropertiesService(robot.name)
+        # if not properties.success:
+        #     raise RuntimeError('Could not receive robot information from gazebo. Message:%s' % properties.status_message)
+        # for joint in properties.joint_names:
+        #     jp = self._getJointPropertiesService(joint)
+        #     if not jp.success:
+        #         raise RuntimeError('Could not receive joint information for joint %s from gazebo. Message:%s' %
+        #                            (joint, jp.status_message))
+        #     robot.configuration[joint] = jp.position[0]
 
     def _sendModelState(self, modelInfo, frameName):
         # first reset all wrenches
@@ -262,9 +279,10 @@ class GazeboSimulatorWrapper(Simulator):
         return result.success
 
     def reset(self):
+        pass
         # self._resetWorldService()
         # self._resetSimulationService()
-        self._executePaused(self._robotSimulator.reset, False)
+        # self._executePaused(self._robotSimulator.reset, False)
 
     def startTimer(self):
         # TODO

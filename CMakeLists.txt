@@ -7,6 +7,7 @@ project(manipulation_dreambed)
 find_package(catkin REQUIRED COMPONENTS
   rospy
   std_msgs
+  sensor_msgs
   message_generation
 )
 
@@ -56,6 +57,8 @@ catkin_python_setup()
 add_service_files(
    FILES
     DreamBedEvaluation.srv
+    GetRobotConfiguration.srv
+    SetRobotConfiguration.srv
 #   Service1.srv
 #   Service2.srv
  )
@@ -71,6 +74,7 @@ add_service_files(
  generate_messages(
    DEPENDENCIES
    std_msgs
+   sensor_msgs
  )
 
 ################################################

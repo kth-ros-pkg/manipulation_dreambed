@@ -60,6 +60,12 @@ class Simulator(object):
         pass
 
     @abc.abstractmethod
+    def isGrasped(self, object_name):
+        """
+            Returns whether the given object is grasped by the robot.
+        """
+
+    @abc.abstractmethod
     def reset(self):
         """ Resets the world state to its initial state (that was specified in setWorldState(...)) """
         pass
@@ -93,8 +99,14 @@ class PerformanceJudge(object):
     def start(self):
         raise NotImplementedError('You need to implement a start function!')
 
+    def startRound(self):
+        raise NotImplementedError('You need to implement a start round function!')
+
     def stop(self):
         raise NotImplementedError('You need to implement a stop function!')
+
+    def stopRound(self):
+        raise NotImplementedError('You need to implement a stop round function!')
 
     def methodFailed(self, methodDesc, methodResult):
         """
@@ -124,18 +136,42 @@ class DefaultPerformanceJudge(PerformanceJudge):
         self.reset()
 
     def reset(self):
+        self.numRounds = 0
+        self.successfullRounds = 0
         self.startTime = 0.0
         self.runtime = 0.0
         self.pathLength = 0.0
         self.failed = False
         self.numOptionalFails = 0
         self.numSuccess = 0
+        self.avgScore = 0.0
+
+    def startRound(self):
+        # TODO this should call simulator.startTimer() instead (ROS time)
+        self.startTime = time.time()
+        self.pathLength = 0.0
+        self.failed = False
+        self.numOptionalFails = 0
+        self.numSuccess = 0
+        self.runtime = 0.0
 
     def start(self):
-        self.startTime = time.time()
+        pass
 
     def stop(self):
+        if self.successfullRounds > 0:
+            self.avgScore = self.avgScore / self.successfullRounds
+        else:
+            self.avgScore = float('inf')
+
+    def stopRound(self):
+        self.numRounds += 1
+        # TODO this should call simulator.stopTimer() instead
         self.runtime = time.time() - self.startTime
+        if not self.failed:
+            roundScore = self.getScoreForRound()
+            self.successfullRounds += 1
+            self.avgScore += roundScore
 
     def methodFailed(self, methodDesc, methodResult):
         self.failed = self.failed or not methodDesc.optional
@@ -148,11 +184,19 @@ class DefaultPerformanceJudge(PerformanceJudge):
             # methodResult should be of type Trajectory
             self.pathLength += methodResult.getPathLength()
 
-    def getPerformanceMeasure(self):
-        if self.failed or self.numSuccess == 0:
+    def getScoreForRound(self):
+        if self.failed:
             return float('inf')
-        return -(math.pow(self.numSuccess, 3) / (self.pathLength * self.runtime))
+        return self.runtime
+
+    def getPerformanceMeasure(self):
+        # if self.failed or self.numSuccess == 0:
+        #     return float('inf')
+        # return -(math.pow(self.numSuccess, 3) / (self.pathLength * self.runtime))
         # return self.numOptionalFails * self.optionalFailPenalty + self.pathLength + self.runtime / 60.0
+        if self.successfullRounds == 0:
+            return float('inf')
+        return self.numRounds / self.successfullRounds * self.avgScore
 
 
 class MethodDescriptionBatch:
@@ -224,8 +268,8 @@ class MethodDescription:
 
 
 class ManipulationDreamBed(object):
-    def __init__(self, simulator, portfolioDescription, logFileName=None,
-                 judge=None, logger=Logger()):
+    def __init__(self, simulator, portfolioDescription, numAveragingSteps=1,
+                 logFileName=None, judge=None, logger=Logger()):
         """ Creates a new instance of a manipulation dreambed.
             @param simulator - the simulator to use (must implement the simulator interface)
             @param portfolioDescription - path to a file containing the portfolio description
@@ -235,6 +279,7 @@ class ManipulationDreamBed(object):
         """
         self.simulator = simulator
         self.portfolioDescription = portfolioDescription
+        self.numAveragingSteps = numAveragingSteps
         self.bPortfolioLoaded = False
         self.bInit = False
         self.context = None
@@ -253,12 +298,14 @@ class ManipulationDreamBed(object):
         for mt in METHOD_TYPES_STRING:
             self.methodPortfolio[mt] = {}
 
-    def init(self):
+    def init(self, additional_portfolio_methods=None):
         """ Initializes the dream bed. Call this before evaluating any method! """
         if not self.simulator.isInitialized():
             self.simulator.init()
         if not self.bPortfolioLoaded:
             self._createPortfolio()
+        if additional_portfolio_methods is not None:
+            self._add_additional_methods(additional_portfolio_methods)
         self._initPortfolio()
         self.bInit = True
 
@@ -275,6 +322,7 @@ class ManipulationDreamBed(object):
     def getParameters(self):
         parameters = {}
         conditionals = {}
+        forbiddenParameters = []
 
         for action in self.context.getTask().actions:
             (plannerType, controllerType) = self._getMethodTypes(action)
@@ -289,77 +337,83 @@ class ManipulationDreamBed(object):
                 self._extractParameters(methodType=plannerType, methodName=planner,
                                         methodParamPrefix=plannerParamPrefix,
                                         globalParameters=parameters,
-                                        globalConditionals=conditionals)
+                                        globalConditionals=conditionals,
+                                        globalForbidden=forbiddenParameters)
             for controller in controllers:
                 self._extractParameters(methodType=controllerType, methodName=controller,
                                         methodParamPrefix=controllerParamPrefix,
                                         globalParameters=parameters,
-                                        globalConditionals=conditionals)
+                                        globalConditionals=conditionals,
+                                        globalForbidden=forbiddenParameters)
 
-        return (parameters, conditionals.values(), [])
+        return parameters, conditionals.values(), forbiddenParameters
 
     def evaluate(self, **kwargs):
         # First copy the scene so we can modify it
         originalScene = self.context.getSceneInformation()
-        modifiableScene = copy.deepcopy(originalScene)
-        self.context.sceneInfo = modifiableScene
-        # Now, build up a list of all methods we need to run
-        methods = self._assembleMethodsList(kwargs)
-        methods = self._resolveDependencies(methods)
-        # Set the simulator up and let the judge know execution is starting.
-        self.simulator.setWorldState(self.context.getSceneInformation())
         self._judge.reset()
         self._judge.start()
-        # Initialize some variables
-        numExecutedMethods = 0
-        success = True
-        # Run over task and execute methods with their respective parameters
-        # and collect performance measures
-        while numExecutedMethods < len(methods) and success:
-            self._logger.logdebug('Running method ' + str(numExecutedMethods))
-            batch = None # set batch to None so we don't execute an old batch again
-            currentMethodDesc = methods[numExecutedMethods]
-            currentMethod = self.methodPortfolio[currentMethodDesc.type][currentMethodDesc.method_choice]
-            # Check whether we are using a method that supports batch processing
-            if currentMethod.supportsBatchProcessing():
-                # in this case create a batch and execute it as batch
-                batch = self._assembleBatch(methods[numExecutedMethods:])
-            if batch is not None:
-                # Execute the current batch
-                (success, result) = self._executeBatch(batch, kwargs)
-                numExecutedMethods += batch.getBatchSize()
-            else:
-                # Execute the current method and pass it the result of the previous method
-                (success, result) = self._executeMethod(currentMethodDesc, kwargs)
-                numExecutedMethods += 1
-            if not success:
-                failedMethods = [currentMethodDesc]
+        for evalIdx in range(self.numAveragingSteps):
+            modifiableScene = copy.deepcopy(originalScene)
+            self.context.sceneInfo = modifiableScene
+            # Now, build up a list of all methods we need to run
+            methods = self._assembleMethodsList(kwargs)
+            methods = self._resolveDependencies(methods)
+            # Set the simulator up and let the judge know execution is starting.
+            self.simulator.setWorldState(self.context.getSceneInformation())
+            self._judge.startRound()
+            # Initialize some variables
+            numExecutedMethods = 0
+            success = True
+            # Run over task and execute methods with their respective parameters
+            # and collect performance measures
+            while numExecutedMethods < len(methods) and success:
+                self._logger.logdebug('Running method ' + str(numExecutedMethods))
+                batch = None # set batch to None so we don't execute an old batch again
+                currentMethodDesc = methods[numExecutedMethods]
+                currentMethod = self.methodPortfolio[currentMethodDesc.type][currentMethodDesc.method_choice]
+                # Check whether we are using a method that supports batch processing
+                if currentMethod.supportsBatchProcessing():
+                    # in this case create a batch and execute it as batch
+                    batch = self._assembleBatch(methods[numExecutedMethods:])
                 if batch is not None:
-                    failedMethods = batch.getFailedMethods()
-                for failedMethod in failedMethods:
-                    self._judge.methodFailed(failedMethod, result)
-                    msg = 'The method ' + failedMethod.name + ' of type ' + failedMethod.type + ' failed.'
-                    self._logger.logwarn(msg)
-                    result = None
-                    # we can skip this method if it is optional
-                    if not failedMethod.optional:
-                        self._logger.logwarn('The failed method was not optional, aborting execution.')
-                        success = False
-                    else:
-                        success = True
-            else:
-                self.simulator.getWorldState(self.context.getSceneInformation())
-                successfulMethods = [currentMethodDesc]
-                if batch is not None:
-                    successfulMethods = batch.getMethodDescriptions()
-                for successfulMethod in successfulMethods:
-                    self._judge.methodSucceeded(successfulMethod, result)
+                    # Execute the current batch
+                    (success, result) = self._executeBatch(batch, kwargs)
+                    numExecutedMethods += batch.getBatchSize()
+                else:
+                    # Execute the current method and pass it the result of the previous method
+                    (success, result) = self._executeMethod(currentMethodDesc, kwargs)
+                    numExecutedMethods += 1
+                if not success:
+                    failedMethods = [currentMethodDesc]
+                    if batch is not None:
+                        failedMethods = batch.getFailedMethods()
+                    for failedMethod in failedMethods:
+                        self._judge.methodFailed(failedMethod, result)
+                        msg = 'The method ' + failedMethod.name + ' of type ' + failedMethod.type + ' failed.'
+                        self._logger.logwarn(msg)
+                        result = None
+                        # we can skip this method if it is optional
+                        if not failedMethod.optional:
+                            self._logger.logwarn('The failed method was not optional, aborting execution.')
+                            success = False
+                        else:
+                            success = True
+                else:
+                    self.simulator.getWorldState(self.context.getSceneInformation())
+                    successfulMethods = [currentMethodDesc]
+                    if batch is not None:
+                        successfulMethods = batch.getMethodDescriptions()
+                    for successfulMethod in successfulMethods:
+                        self._judge.methodSucceeded(successfulMethod, result)
 
-        # We are done executing. Let the judge know and reset everything
+            # We are done executing this round. Let the judge know and reset everything
+            self._judge.stopRound()
+            self.context.sceneInfo = originalScene
+            self._releaseResources()
+            self.simulator.setWorldState(originalScene)
+        # We are done for good. Let the judge know.
         self._judge.stop()
-        self.context.sceneInfo = originalScene
-        self._releaseResources()
-        self.simulator.setWorldState(originalScene)
         objectiveValue = self._judge.getPerformanceMeasure()
         if len(self._logFileName) > 0:
             try:
@@ -436,8 +490,14 @@ class ManipulationDreamBed(object):
         for t in types:
             self.methodPortfolio[t].update([(method_instance.getName(), method_instance)])
 
+    def _add_additional_methods(self, method_list):
+        for method in method_list:
+            types = method.getRoles()
+            for t in types:
+                self.methodPortfolio[t].update([(method.getName(), method)])
+
     def _extractParameters(self, methodType, methodName, methodParamPrefix,
-                           globalParameters, globalConditionals):
+                           globalParameters, globalConditionals, globalForbidden):
         paramsMethod = self.methodPortfolio[methodType][methodName].getParameters(role=methodType, paramPrefix=methodParamPrefix)
         for (paramName, paramDef) in paramsMethod.items():
             # first add the parameters to the normal parameter
@@ -447,6 +507,9 @@ class ManipulationDreamBed(object):
         conditionalsMethod = self.methodPortfolio[methodType][methodName].getConditionals(role=methodType, paramPrefix=methodParamPrefix)
         for (paramName, condition) in conditionalsMethod.items():
             globalConditionals[paramName] = condition + ' && ' + methodParamPrefix + ' == ' + methodName
+
+        forbiddenParameters = self.methodPortfolio[methodType][methodName].getForbiddenConfigurations(role=methodType, paramPrefix=methodParamPrefix)
+        globalForbidden.extend(forbiddenParameters)
 
     def _initPortfolio(self):
         for t in self.methodPortfolio.keys():
@@ -518,6 +581,8 @@ class ManipulationDreamBed(object):
             return (False, None)
 
         # Else switch case method types
+        solution = None
+        success = False
         if currentMethodDesc.type == ArmPlanner.STRING_REPRESENTATION:
             solution = self._executeArmPlanner(planner=method, inputs=inputs,
                                                paramPrefix=currentMethodDesc.paramPrefix,
@@ -544,7 +609,7 @@ class ManipulationDreamBed(object):
         currentMethodDesc.finished = True
         if solution is not None:
             currentMethodDesc.result = solution
-        return (success, solution)
+        return success, solution
 
     def _executeArmPlanner(self, planner, inputs, paramPrefix, parameters, graspResult):
         # planner.preparePlanning(self.context)
@@ -555,7 +620,7 @@ class ManipulationDreamBed(object):
                 self._logger.logwarn('Could not resolve goal grasp for arm planner. Arm planner failed')
                 return None
             # TODO add constraints (orientation and approach vector)
-            goal = graspResult.position
+            goal = graspResult.grasp_pose
 
         solution = planner.planArmTrajectory(goal=goal, context=self.context, paramPrefix=paramPrefix, parameters=parameters)
         return solution
@@ -564,12 +629,15 @@ class ManipulationDreamBed(object):
         if traj is None or not isinstance(traj, Trajectory):
             raise ValueError('Attempting to execute an arm controller, but no trajectory given, instead: %s' % traj)
         success = controller.executeArmTrajectory(trajectory=traj, context=self.context,
-                                     paramPrefix=paramPrefix, parameters=parameters)
+                                                  paramPrefix=paramPrefix, parameters=parameters)
         return success
 
     def _executeGraspPlanner(self, planner, inputs, paramPrefix, parameters):
         graspResult = planner.planGrasp(object=inputs['objectName'], context=self.context, paramPrefix=paramPrefix,
-                                   parameters=parameters)
+                                        parameters=parameters)
+        if graspResult is not None and graspResult.grasped_object is None:
+            # in case the method didn't set this by itself
+            graspResult.grasped_object = inputs['objectName']
         return graspResult
 
     def _executeGraspController(self, controller, inputs, paramPrefix, parameters, graspResult):

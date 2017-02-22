@@ -6,6 +6,7 @@
 """
 import yaml
 import numpy
+import copy
 from ActionPrimitives import (Task, GraspReference, MoveArmAction, GraspAction, PlaceAction)
 
 
@@ -71,15 +72,18 @@ class RobotInformation(yaml.YAMLObject):
     """ Stores information about the robot. """
     yaml_tag = u'!Robot'
 
-    def __init__(self, name, basePose, configuration):
+    def __init__(self, name, basePose, configuration, grasped_object):
         self.name = name
         # self.modelFile = modelFile
         self.pose = basePose
         self.configuration = configuration
+        self.grasped_object = grasped_object
+        if grasped_object == 'None':
+            self.grasped_object = None
 
     def __repr__(self):
-        return "%s(name=%s, pose=%r, configuration=%s)" % (
-            self.__class__.__name__, self.name, self.pose, self.configuration)
+        return "%s(name=%s, pose=%r, configuration=%s, grasped_object=%s)" % (
+            self.__class__.__name__, self.name, self.pose, self.configuration, self.grasped_object)
 
 
 class ObjectInformation(yaml.YAMLObject):
@@ -125,6 +129,9 @@ class SceneInformation(object):
             pose = Pose()
         self.objects.append(ObjectInformation(name, pose))
 
+    def getObjects(self):
+        return self.objects
+
     def removeObjectInfo(self, name):
         toRemove = None
         for obj in self.objects:
@@ -136,6 +143,11 @@ class SceneInformation(object):
 
     def getRobotName(self):
         return self.robot.name
+
+    def copy(self, scene_info):
+        self.robot = copy.deepcopy(scene_info.getRobotInfo())
+        self.objects = copy.deepcopy(scene_info.getObjects())
+        self.frameName = scene_info.frameName
 
     def _loadSceneInformation(self, sceneDescriptionFile):
         stream = file(sceneDescriptionFile, 'r')
