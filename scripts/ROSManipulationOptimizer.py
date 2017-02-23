@@ -14,7 +14,7 @@ import rospy
 import sys
 import argparse
 from manipulation_dreambed.ManipulationOptimizer import ManipulationOptimizer
-from manipulation_dreambed.ManipulationDreamBed import ManipulationDreamBed, Logger
+from manipulation_dreambed.ManipulationDreamBed import ManipulationDreamBed, Logger, OptimizationLogger
 from manipulation_dreambed.GazeboSimulator import GazeboSimulatorWrapper
 import manipulation_dreambed.DummySimulator as DummySimulator
 from manipulation_dreambed.Context import Context
@@ -67,6 +67,12 @@ if __name__ == "__main__":
                         help='File that contains a task description.')
     parser.add_argument('--log', nargs='?', default='../result.yaml',
                         help='File for logging objective values.')
+    parser.add_argument('--plot', nargs='?', default='../result.png',
+                        help='File for plotting the development of objective values.')
+    parser.add_argument('numEvals', type=int,
+                        help='Number of pysmac evaluations.')
+    parser.add_argument('--numRounds', type=int, default=5,
+                        help='Number of averaging rounds to compensate for randomness.')
     # rospy.loginfo('The filtered arguments are: %s', argv)
     args = parser.parse_args(args=argv[1:])
     portfolioDescription = args.portfolio
@@ -87,8 +93,10 @@ if __name__ == "__main__":
         additional_portfolio_methods = None
     # Set up dreambed.
     rospy.loginfo('ROSManipulationOptimizer: Setting up dreambed...')
+    optimizationLogger = OptimizationLogger(args.log, args.plot, logger)
     dreamBed = ManipulationDreamBed(simulator, portfolioDescription,
-                                    numAveragingSteps=5, logFileName=args.log,
+                                    optimizationLogger,
+                                    numAveragingSteps=args.numRounds,
                                     logger=logger)
     dreamBed.init(additional_portfolio_methods)
     rospy.loginfo('ROSManipulationOptimizer: Setting context...')
@@ -98,7 +106,8 @@ if __name__ == "__main__":
     manipOptimizer = ManipulationOptimizer(dreamBed)
     # Do the job, optimize!
     rospy.loginfo('ROSManipulationOptimizer: Starting optimizer...')
-    optimalSolution = manipOptimizer.run(deterministic=True)
+    optimalSolution = manipOptimizer.run(numEvals=args.numEvals, deterministic=True)
+    optimizationLogger.savePlot()
     # debugFunction(dreamBed, context)
     # Done, clean up.
     rospy.loginfo('ROSManipulationOptimizer: Optimization finished. Terminating.')

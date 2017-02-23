@@ -13,7 +13,7 @@ import importlib
 import ActionPrimitives
 import time
 import copy
-import math
+import matplotlib.pyplot as plt
 from MethodTypes import (Trajectory, GraspResult, METHOD_TYPES_STRING, ArmPlanner,
                          ArmController, GraspPlanner, GraspController, PlacePlanner,
                          PlaceController)
@@ -31,6 +31,44 @@ class Logger(object):
     def logerr(self, message):
         """Log message on error level """
         pass
+
+
+class OptimizationLogger(object):
+    """ Class that logs optimization results. """
+    def __init__(self, logFile, plotFile, msgLogger):
+        self.msgLogger = msgLogger
+        self.logFileName = logFile
+        self.plotFileName = plotFile
+        self.objectiveValues = []
+        self.bestParams = None
+        self.bestObjectValue = float('inf')
+
+    def recordEvaluation(self, value, params):
+        self.objectiveValues.append(value)
+        if value < self.bestObjectValue:
+            self.bestObjectValue = value
+            self.bestParams = params
+        if len(self.logFileName) > 0:
+            try:
+                logFile = open(self.logFileName, "a")
+                yaml.dump((params, value), logFile)
+                logFile.close()
+            except IOError as e:
+                self.msgLogger.logerr('Could not write information to optimization log file: ' + repr(e))
+
+    def savePlot(self):
+        if self.plotFileName is not None:
+            evals = range(len(self.objectiveValues))
+            plt.plot(evals, self.objectiveValues)
+            plt.xlabel('Evaluations')
+            plt.ylabel('Objective Value')
+            plt.title('Development of objective values')
+            plt.savefig(self.plotFileName)
+
+    def reset(self):
+        self.bestParams = None
+        self.bestObjectValue = float('inf')
+        self.objectiveValues = []
 
 
 class Simulator(object):
@@ -108,7 +146,7 @@ class PerformanceJudge(object):
     def stopRound(self):
         raise NotImplementedError('You need to implement a stop round function!')
 
-    def methodFailed(self, methodDesc, methodResult):
+    def methodFailed(self, methodDesc):
         """
             Called when a method failed in either planning or control.
             @param methodDesc - instance of class MethodDescription containing information about
@@ -117,7 +155,7 @@ class PerformanceJudge(object):
         """
         raise NotImplementedError('You need to implement a methodFailed function!')
 
-    def methodSucceeded(self, methodDesc, methodResult):
+    def methodSucceeded(self, methodDesc):
         """
             Called when a method succeeded in either planning or control.
             @param methodDesc - instance of class MethodDescription containing information about
@@ -131,12 +169,12 @@ class PerformanceJudge(object):
 
 
 class DefaultPerformanceJudge(PerformanceJudge):
-    def __init__(self, simulator):
+    def __init__(self, simulator, failedRoundScore=200.0):
         self.simulator = simulator
+        self.failedRoundScore = failedRoundScore
         self.reset()
 
     def reset(self):
-        self.numRounds = 0
         self.successfullRounds = 0
         self.startTime = 0.0
         self.runtime = 0.0
@@ -144,7 +182,7 @@ class DefaultPerformanceJudge(PerformanceJudge):
         self.failed = False
         self.numOptionalFails = 0
         self.numSuccess = 0
-        self.avgScore = 0.0
+        self.accScore = 0.0
 
     def startRound(self):
         # TODO this should call simulator.startTimer() instead (ROS time)
@@ -159,34 +197,30 @@ class DefaultPerformanceJudge(PerformanceJudge):
         pass
 
     def stop(self):
-        if self.successfullRounds > 0:
-            self.avgScore = self.avgScore / self.successfullRounds
-        else:
-            self.avgScore = float('inf')
+        pass
 
     def stopRound(self):
-        self.numRounds += 1
         # TODO this should call simulator.stopTimer() instead
         self.runtime = time.time() - self.startTime
+        roundScore = self.getScoreForRound()
+        self.accScore += roundScore
         if not self.failed:
-            roundScore = self.getScoreForRound()
             self.successfullRounds += 1
-            self.avgScore += roundScore
 
-    def methodFailed(self, methodDesc, methodResult):
+    def methodFailed(self, methodDesc):
         self.failed = self.failed or not methodDesc.optional
         if methodDesc.optional:
             self.numOptionalFails += 1
 
-    def methodSucceeded(self, methodDesc, methodResult):
+    def methodSucceeded(self, methodDesc):
         self.numSuccess += 1
         if methodDesc.type == ArmPlanner.STRING_REPRESENTATION:
             # methodResult should be of type Trajectory
-            self.pathLength += methodResult.getPathLength()
+            self.pathLength += methodDesc.result.getPathLength()
 
     def getScoreForRound(self):
         if self.failed:
-            return float('inf')
+            return self.failedRoundScore
         return self.runtime
 
     def getPerformanceMeasure(self):
@@ -195,8 +229,8 @@ class DefaultPerformanceJudge(PerformanceJudge):
         # return -(math.pow(self.numSuccess, 3) / (self.pathLength * self.runtime))
         # return self.numOptionalFails * self.optionalFailPenalty + self.pathLength + self.runtime / 60.0
         if self.successfullRounds == 0:
-            return float('inf')
-        return self.numRounds / self.successfullRounds * self.avgScore
+            return self.accScore
+        return self.accScore / self.successfullRounds
 
 
 class MethodDescriptionBatch:
@@ -204,7 +238,7 @@ class MethodDescriptionBatch:
         self._descriptions = []
         self._types = []
         self._arguments = []
-        self._results = []
+        self._successLog = []
         self._methodName = methodName
 
     def getMethodName(self):
@@ -213,13 +247,28 @@ class MethodDescriptionBatch:
     def getBatchSize(self):
         return len(self._descriptions)
 
+    def getBatchInput(self):
+        return [(self.getType(idx), self.getArguments(idx), self.isOptional(idx)) for idx in range(len(self._descriptions))]
+
+    def getRoleSequence(self):
+        return [self.getType(idx) for idx in range(len(self._descriptions))]
+
     def addMethodDescription(self, methodDesc):
         self._descriptions.append(methodDesc)
         self._types.append(methodDesc.type)
         inputs = methodDesc.inputs.copy()
         inputs['paramPrefix'] = methodDesc.paramPrefix
+        if methodDesc.supplyMethodDesc is not None:
+            if methodDesc.type == GraspController.STRING_REPRESENTATION:
+                inputs['grasp'] = methodDesc.supplyMethodDesc.result
+            elif methodDesc.type == ArmController.STRING_REPRESENTATION:
+                inputs['trajectory'] = methodDesc.supplyMethodDesc.result
+            elif methodDesc.type == ArmPlanner.STRING_REPRESENTATION:
+                if methodDesc.supplyMethodDesc.result is not None:
+                    inputs['goal'] = methodDesc.supplyMethodDesc.result.grasp_pose
+            #TODO other controllers also need their respective inputs
         self._arguments.append(inputs)
-        self._results.append((False, None))
+        self._successLog.append(False)
 
     def getType(self, idx):
         return self._types[idx]
@@ -228,17 +277,28 @@ class MethodDescriptionBatch:
         return self._arguments[idx]
 
     def setResult(self, idx, bSuccess, result):
-        self._results[idx] = (bSuccess, result)
+        self._descriptions[idx].result = result
+        self._successLog[idx] = bSuccess
 
     def getMethodDescriptions(self):
         return self._descriptions
 
+    def isOptional(self, idx):
+        return self._descriptions[idx].optional
+
     def getFailedMethods(self):
         failedMethods = []
-        for idx in range(len(self._results)):
-            if not self._results[idx][0]:
+        for idx in range(len(self._successLog)):
+            if not self._successLog[idx]:
                 failedMethods.append(self._descriptions[idx])
         return failedMethods
+
+    def getSuccessfulMethods(self):
+        successfulMethods = []
+        for idx in range(len(self._successLog)):
+            if self._successLog[idx]:
+                successfulMethods.append(self._descriptions[idx])
+        return successfulMethods
 
 
 class MethodDescription:
@@ -268,8 +328,8 @@ class MethodDescription:
 
 
 class ManipulationDreamBed(object):
-    def __init__(self, simulator, portfolioDescription, numAveragingSteps=1,
-                 logFileName=None, judge=None, logger=Logger()):
+    def __init__(self, simulator, portfolioDescription, optimizationLogger,
+                 numAveragingSteps=1, judge=None, logger=Logger()):
         """ Creates a new instance of a manipulation dreambed.
             @param simulator - the simulator to use (must implement the simulator interface)
             @param portfolioDescription - path to a file containing the portfolio description
@@ -291,10 +351,7 @@ class ManipulationDreamBed(object):
         else:
             self._judge = judge
         self._logger = logger
-        if logFileName is None:
-            self._logFileName = ''
-        else:
-            self._logFileName = logFileName
+        self.optimizationLogger = optimizationLogger
         for mt in METHOD_TYPES_STRING:
             self.methodPortfolio[mt] = {}
 
@@ -369,30 +426,28 @@ class ManipulationDreamBed(object):
             # and collect performance measures
             while numExecutedMethods < len(methods) and success:
                 self._logger.logdebug('Running method ' + str(numExecutedMethods))
-                batch = None # set batch to None so we don't execute an old batch again
                 currentMethodDesc = methods[numExecutedMethods]
                 currentMethod = self.methodPortfolio[currentMethodDesc.type][currentMethodDesc.method_choice]
-                # Check whether we are using a method that supports batch processing
-                if currentMethod.supportsBatchProcessing():
-                    # in this case create a batch and execute it as batch
-                    batch = self._assembleBatch(methods[numExecutedMethods:])
-                if batch is not None:
+                # Try to assemble a batch
+                batch = self._assembleBatch(methods[numExecutedMethods:])
+                # Check whether we are using a method that supports this batch
+                if batch is not None and currentMethod.supportsBatchProcessing(batch.getRoleSequence()):
                     # Execute the current batch
-                    (success, result) = self._executeBatch(batch, kwargs)
+                    success = self._executeBatch(batch, kwargs)
                     numExecutedMethods += batch.getBatchSize()
                 else:
                     # Execute the current method and pass it the result of the previous method
-                    (success, result) = self._executeMethod(currentMethodDesc, kwargs)
+                    success = self._executeMethod(currentMethodDesc, kwargs)
+                    batch = None # set batch to None so we don't execute an old batch again
                     numExecutedMethods += 1
                 if not success:
                     failedMethods = [currentMethodDesc]
                     if batch is not None:
                         failedMethods = batch.getFailedMethods()
                     for failedMethod in failedMethods:
-                        self._judge.methodFailed(failedMethod, result)
+                        self._judge.methodFailed(failedMethod)
                         msg = 'The method ' + failedMethod.name + ' of type ' + failedMethod.type + ' failed.'
                         self._logger.logwarn(msg)
-                        result = None
                         # we can skip this method if it is optional
                         if not failedMethod.optional:
                             self._logger.logwarn('The failed method was not optional, aborting execution.')
@@ -403,9 +458,9 @@ class ManipulationDreamBed(object):
                     self.simulator.getWorldState(self.context.getSceneInformation())
                     successfulMethods = [currentMethodDesc]
                     if batch is not None:
-                        successfulMethods = batch.getMethodDescriptions()
+                        successfulMethods = batch.getSuccessfulMethods()
                     for successfulMethod in successfulMethods:
-                        self._judge.methodSucceeded(successfulMethod, result)
+                        self._judge.methodSucceeded(successfulMethod)
 
             # We are done executing this round. Let the judge know and reset everything
             self._judge.stopRound()
@@ -415,13 +470,7 @@ class ManipulationDreamBed(object):
         # We are done for good. Let the judge know.
         self._judge.stop()
         objectiveValue = self._judge.getPerformanceMeasure()
-        if len(self._logFileName) > 0:
-            try:
-                logFile = open(self._logFileName, "a")
-                yaml.dump((kwargs, objectiveValue), logFile)
-                logFile.close()
-            except IOError as e:
-                self._logger.logerr('Could not write information to optimization log file: ' + repr(e))
+        self.optimizationLogger.recordEvaluation(objectiveValue, kwargs)
         return objectiveValue
 
     def destroy(self):
@@ -532,40 +581,53 @@ class ManipulationDreamBed(object):
 
     def _executeBatch(self, batch, parameters):
         self._logger.loginfo('Executing batch. Batch method is ' + batch.getMethodName())
+        self._logger.loginfo('Role sequence is ' + str(batch.getRoleSequence()))
         # First do some sanity checks for the first role
         firstMethodRole = batch.getMethodDescriptions()[0]
-        previousResult = firstMethodRole.supplyMethodDesc.result
+        if firstMethodRole.supplyMethodDesc is not None:
+            previousResult = firstMethodRole.supplyMethodDesc.result
+        else:
+            previousResult = None
         if firstMethodRole.isController() and previousResult is None:
-            return (False, None)
+            return False
         if firstMethodRole.type == GraspController.STRING_REPRESENTATION and\
                 not isinstance(previousResult, GraspResult):
             raise ValueError('Attempting to execute a grasp controller, but no grasp given')
         # If all these conditions are fulfilled, let's create the arguments for batch execution
         # First, get the method that is going to execute the batch
-        types = [batch.getType(idx) for idx in range(len(batch.getBatchSize()))]
-        # TODO we could do a sanity check here, whether this method is really registered for all assigned roles
+        types = [batch.getType(idx) for idx in range(batch.getBatchSize())]
         method = self.methodPortfolio[types[0]][batch.getMethodName()]
-        # Create the inputs for all roles
-        batchInput = [(batch.getType(idx), batch.getArguments(idx)) for idx in range(len(batch.getBatchSize()))]
+        # TODO we could do a sanity check here, whether this method is really registered for all assigned roles
         # Make sure nothing is conflicting
         self._resolveResourceAllocationConflicts(method, types)
+        # Create the inputs for all roles
+        batchInput = batch.getBatchInput()
+        # The method needs to be able to synch its world state with the simulator,
+        # so let's provide it with a synch function without exposing the whole simulator.
+
+        def getWorldStateFn(si):
+            self.simulator.getWorldState(si)
+
         # Now execute the batch
-        results = method.executeBatch(startContext=self.context, batchInput=batchInput, parameters=parameters)
+        results = method.executeBatch(context=self.context, batchInput=batchInput,
+                                      parameters=parameters, getWorldStateFn=getWorldStateFn)
         # Next, save the results in our batch data structure
         idx = 0
         bAllSuccess = True
         for (bSuccess, result) in results:
             batch.setResult(idx, bSuccess=bSuccess, result=result)
+            bAllSuccess = bAllSuccess and (bSuccess or batch.isOptional(idx))
+            if bSuccess and isinstance(result, GraspResult):
+                result.grasped_object = batchInput[idx][1]['objectName']
+                self._runningGraspController = method
             idx += 1
-            bAllSuccess = bAllSuccess and bSuccess
-            #TODO if a grasp controller is successful, we need to to save it here as running controller
 
         # Return success if we have a success for all batch elements
-        bAllSuccess = bAllSuccess and idx == batch.getBatchSize() - 1
-        return (bAllSuccess, results[-1][1]) # the result is the result of the last batch element
+        bAllSuccess = bAllSuccess and idx == batch.getBatchSize()
+        return bAllSuccess
 
     def _executeMethod(self, currentMethodDesc, parameters):
-        self._logger.loginfo('Executing method ' + currentMethodDesc.method_choice)
+        self._logger.loginfo('Executing method ' + currentMethodDesc.method_choice + ' as ' + currentMethodDesc.type)
         # get the instance of the selected method
         method = self.methodPortfolio[currentMethodDesc.type][currentMethodDesc.method_choice]
         self._resolveResourceAllocationConflicts(method, [currentMethodDesc.type])
@@ -578,7 +640,7 @@ class ManipulationDreamBed(object):
         # If this method is a controller it always needs a result, hence we can just abort if
         # we don't have a previous result.
         if currentMethodDesc.isController() and previousResult is None:
-            return (False, None)
+            return False
 
         # Else switch case method types
         solution = None
@@ -609,7 +671,7 @@ class ManipulationDreamBed(object):
         currentMethodDesc.finished = True
         if solution is not None:
             currentMethodDesc.result = solution
-        return success, solution
+        return success
 
     def _executeArmPlanner(self, planner, inputs, paramPrefix, parameters, graspResult):
         # planner.preparePlanning(self.context)
@@ -633,7 +695,7 @@ class ManipulationDreamBed(object):
         return success
 
     def _executeGraspPlanner(self, planner, inputs, paramPrefix, parameters):
-        graspResult = planner.planGrasp(object=inputs['objectName'], context=self.context, paramPrefix=paramPrefix,
+        graspResult = planner.planGrasp(objectName=inputs['objectName'], context=self.context, paramPrefix=paramPrefix,
                                         parameters=parameters)
         if graspResult is not None and graspResult.grasped_object is None:
             # in case the method didn't set this by itself
@@ -671,8 +733,9 @@ class ManipulationDreamBed(object):
         return True
 
     def _resolveDependencies(self, methods):
-        """ Adds a duplicate reference for each grasp planning method that an arm planning
-            method depends on in front of the respective arm planning method."""
+        """ Returns a list of reordered method descriptions such that each
+            method is after the methods it depends on, i.e. it moves grasp planners
+            in front of the respective arm planning method."""
         reorderedMethods = []
         skipIndex = -1
         # Run over all methods and check whether its an ArmPlanner depending on a grasp planner
@@ -707,10 +770,10 @@ class ManipulationDreamBed(object):
 
     def _assembleBatch(self, methods):
         batchSize = 0
-        methodName = methods[0].getName()
+        methodName = methods[0].method_choice
         batch = MethodDescriptionBatch(methodName=methodName)
         # count how many roles this method takes in a sequence
-        while batchSize < len(methods) and methodName == methods[batchSize].getName():
+        while batchSize < len(methods) and methodName == methods[batchSize].method_choice:
             batch.addMethodDescription(methods[batchSize])
             batchSize += 1
         # A batch has to have size > 1, else it's just a single method

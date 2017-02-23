@@ -91,10 +91,10 @@ class DummyController(PortfolioMethod, ArmController, GraspController):
         self._dummy_simulator = simulator
         self._logger = simulator.getLogger()
 
-    def executeBatch(self, startContext, batchInput, parameters):
+    def executeBatch(self, startContext, batchInput, parameters, getWorldStateFn):
         pass
 
-    def supportsBatchProcessing(self):
+    def supportsBatchProcessing(self, roleSequence):
         return False
 
     def getForbiddenConfigurations(self, role, paramPrefix):

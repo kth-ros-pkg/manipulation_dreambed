@@ -88,7 +88,7 @@ class PortfolioMethod(object):
         pass
 
     @abc.abstractmethod
-    def supportsBatchProcessing(self):
+    def supportsBatchProcessing(self, roleSequence):
         """ Returns whether this method supports batch processing. If a method implements multiple
             different method types (e.g. ArmPlanner and GraspPlanner) this method can be queried to
             process multiple planning/control requests at once rather than in sequence. For instance,
@@ -96,19 +96,26 @@ class PortfolioMethod(object):
             the inputs for both roles at once rather than in sequence. This allows the method to tackle
             both problems at the same time instead of sequentially (i.e. plan the grasp such that it can
             move the arm to the location).
-            If a method supports batch processing, it must support this for any sequence of its roles.
+            Since it may make sense to support only batches of certain role sequences,
+            the method can base its reply on the given roleSequence.
+            @param roleSequence - a list of strings, where each string describes the role
+            @return Boolean - whether a batch of the given sequence is supported or not
         """
         pass
 
     @abc.abstractmethod
-    def executeBatch(self, startContext, batchInput, parameters):
+    def executeBatch(self, context, batchInput, parameters, getWorldStateFn):
         """ If this method supports batch processing, this function executes a whole batch of tasks.
-            @param TODO startContext
-            @param batchInput - a list of tuples (role_name, role_input), where role_name is the name of
+            It is guaranteed that the batch is only of a sequence accepted by supportsBatchProcessing(...)
+            @param context - the context in which to execute the batch. It contains the scene state at the beginning
+                            of the batch execution. This scene information may be updated by this function using
+                            the getWorldStateFn callback.
+            @param batchInput - a list of tuples (role_name, role_input, b_optional), where role_name is the name of
             the role (e.g. ArmPlanner, GraspController), and role_input is a dictionary of inputs for
             that respective role. Each input is stored under the same key as the respective function
-            argument.
-            @param TODO parameters
+            argument. b_optional is Boolean indicating whether a role is optional, i.e. it is allowed to fail.
+            @param parameters - a dictionary containing all parameter assignments (similar to normal method execution)
+            @param getWorldStateFn - Function to update the world state - call as getWorldStateFn(context.getSceneInformation())
             @return - an ordered list that contains for each task a tuple (success, result).
         """
         raise NotImplementedError('executeBatch-function of root class MethodType was called: You need to override this' + \
@@ -166,10 +173,10 @@ class GraspPlanner(object):
     STRING_REPRESENTATION = 'GraspPlanner'
 
     @abc.abstractmethod
-    def planGrasp(self, object, context, paramPrefix, parameters):
+    def planGrasp(self, objectName, context, paramPrefix, parameters):
         """
             Plans a grasp for the given object.
-            @param object - object information containing the pose and the name of the object.
+            @param objectName - object information containing the pose and the name of the object.
             @param context - the context
             @param paramPrefix - a string containing the prefix used for the parameters keys
             @param parameters - a dict containing the parameters for this method.

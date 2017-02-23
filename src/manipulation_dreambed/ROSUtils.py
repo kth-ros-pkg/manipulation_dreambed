@@ -139,4 +139,16 @@ def extract_part_trajectory(joint_names, trajectory):
     return output_traj
 
 
+def guarded_service_call(service_proxy, request, service_name, max_trials=10):
+    for trial in range(max_trials):
+        try:
+            response = service_proxy(request)
+            return response
+        except rospy.ServiceException as exc:
+            rospy.logerr('A service call failed: ' + str(exc))
+            if rospy.is_shutdown():
+                return None
+            rospy.logwarn('Waiting for service %s to come up again.' % service_name)
+            rospy.wait_for_service(service_name)
+    return None
 
