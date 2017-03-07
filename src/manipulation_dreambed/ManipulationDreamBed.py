@@ -167,6 +167,45 @@ class PerformanceJudge(object):
     def getPerformanceMeasure(self):
         raise NotImplementedError('You need to implement a getPerformanceMeasure function!')
 
+class PlanningPerformanceJudge(PerformanceJudge):
+    def __init__(self):
+        self.totalRuntime = 0.0
+        self.numSuccessfulRuns = 0
+        self.startTime = 0
+        self.failed = False
+
+    def reset(self):
+        self.totalRuntime = 0.0
+        self.numSuccessfulRuns = 0
+        self.failed = False
+
+    def startRound(self):
+        self.failed = False
+        self.startTime = time.time()
+
+    def stopRound(self):
+        self.totalRuntime += time.time() - self.startTime
+        self.startTime = 0.0
+        if not self.failed:
+            self.numSuccessfulRuns += 1
+
+    def start(self):
+        self.reset()
+
+    def stop(self):
+        pass
+
+    def methodFailed(self, methodDesc):
+        self.failed = self.failed or not methodDesc.optional
+
+    def methodSucceeded(self, methodDesc):
+        pass
+
+    def getPerformanceMeasure(self):
+        if self.numSuccessfulRuns == 0:
+            return float('inf')
+        return self.totalRuntime / self.numSuccessfulRuns
+
 
 class DefaultPerformanceJudge(PerformanceJudge):
     def __init__(self, simulator, failedRoundScore=200.0):

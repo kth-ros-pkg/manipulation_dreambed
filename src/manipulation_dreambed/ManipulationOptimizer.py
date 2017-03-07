@@ -26,17 +26,15 @@ class ManipulationOptimizer(object):
         self.iterationCounter = 0
         self.totalNumIterations = numEvals
         (paramDef, condParams, forbiddenClauses) = self.dreamBed.getParameters()
-        # paramDef = dict(x=('real', [0.9, 1.5], 1.2),
-        #                 y=('real', [-0.5, 0.5], 0.0),
-        #                 phi=('real', [-0.3, 0.3], 0.0))
-        # IPython.embed()
-
         score, bestParameters = self.optimizer.minimize(func=PySMACROSInterface.func,
                                                         max_evaluations=numEvals,
                                                         parameter_dict=paramDef,
+                                                        conditional_clauses=condParams,
+                                                        forbidden_clauses=forbiddenClauses,
                                                         deterministic=deterministic)
         print 'Best score is ', score
         print 'Best parameters are ', bestParameters
+        return score, bestParameters
 
     def serviceCallBack(self, req):
         kwargs = yaml.load(req.dictionary)

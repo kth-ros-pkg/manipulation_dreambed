@@ -1,18 +1,15 @@
 #!/usr/bin/env python
 """
-    This file is part of the RobDREAM (http://robdream.eu/) deliverable D4.2.
+    This file is part of the RobDREAM (http://robdream.eu/) deliverable D4.3.
     Given a task within a context, the ROS node defined in this script utilizes the ManipulationOptimizer
-    to select appropriate algorithms and optimize their respective performance. The best performing choice of
-    methods as well as their respective parameters are TODO: stored? published?
-
-    Note, this node may be replaced by a more general script/node that accesses the
-    DreamBeds of all work packages.
+    to evaluate an algorithm for a given parameter configuration.
 
     @author: Joshua Haustein (haustein@kth.se)
 """
 import rospy
 import sys
 import argparse
+import yaml
 from manipulation_dreambed.ManipulationOptimizer import ManipulationOptimizer
 from manipulation_dreambed.ManipulationDreamBed import ManipulationDreamBed, Logger, OptimizationLogger, PlanningPerformanceJudge
 from manipulation_dreambed.GazeboSimulator import GazeboSimulatorWrapper
@@ -34,28 +31,25 @@ class ROSLogger(Logger):
         rospy.logdebug(message)
 
 
-def debugFunction(dreamBed, context):
-    arm_planners = dreamBed.methodPortfolio['ArmPlanner']
-    arm_controllers = dreamBed.methodPortfolio['ArmController']
-    grasp_planners = dreamBed.methodPortfolio['GraspPlanner']
-    grasp_controllers= dreamBed.methodPortfolio['GraspController']
-    from manipulation_dreambed.Context import Pose
-    import numpy
-    birrt = arm_planners['BiRRTMotionPlanner']
-    # simple_arm_controller = arm_controllers['SimpleArmController']
-    integrated_method = arm_planners['IntegratedHFTSPlanner']
-    hfts_planner = grasp_planners['HFTSGraspPlanner']
-    # simple_grasp_controller = grasp_controllers['SimpleGraspController']
-    goal1 = Pose(numpy.array([0.0, 0.7, 1.6]))
-    goal2 = Pose(numpy.array([0.2, 0.7, 1.8]))
-    simulator = dreamBed.simulator
-    import IPython
-    IPython.embed()
+class DummyLogger(OptimizationLogger):
+    def __init__(self):
+        pass
+
+    def recordEvaluation(self, value, params):
+        pass
+
+    def savePlot(self):
+        pass
+
+    def reset(self):
+        pass
+
 
 if __name__ == "__main__":
-    rospy.init_node('manipulation_optimizer_node')
+    rospy.init_node('manipulation_parameter_evaluation')
     argv = rospy.myargv(argv=sys.argv)
-    parser = argparse.ArgumentParser(description='Script to test the manipulation dream bed.')
+    parser = argparse.ArgumentParser(description='Script to test a set of parameters found by the manipulation dream bed.')
+    parser.add_argument('parameters_file', nargs='?', type=str, help='Path to a yaml file containing parameters to evaluate. Must be a list')
     parser.add_argument('--gzModelPathsFile', nargs='?', default='../data/gazebo_model_paths.yaml',
                         help='Path to gazebo object models.')
     parser.add_argument('--nosim', dest='nosim', action='store_true')
@@ -65,12 +59,6 @@ if __name__ == "__main__":
                         help='File that contains a scene description.')
     parser.add_argument('--task', nargs='?', default='../data/mini_shelf_task.yaml',
                         help='File that contains a task description.')
-    parser.add_argument('--log', nargs='?', default='../result.yaml',
-                        help='File for logging objective values.')
-    parser.add_argument('--plot', nargs='?', default='../result.png',
-                        help='File for plotting the development of objective values.')
-    parser.add_argument('numEvals', type=int,
-                        help='Number of pysmac evaluations.')
     parser.add_argument('--numRounds', type=int, default=5,
                         help='Number of averaging rounds to compensate for randomness.')
     # rospy.loginfo('The filtered arguments are: %s', argv)
@@ -84,7 +72,7 @@ if __name__ == "__main__":
     context.readTask(args.task)
     logger = ROSLogger()
     # Set up simulator.
-    rospy.loginfo('ROSManipulationOptimizer: Setting up simulator...')
+    rospy.loginfo('ParameterEvaluation: Setting up simulator...')
     if args.nosim:
         simulator = DummySimulator.getSimulatorInstance(logger)
         additional_portfolio_methods = [DummySimulator.getControllerInstance()]
@@ -92,8 +80,8 @@ if __name__ == "__main__":
         simulator = GazeboSimulatorWrapper(args.gzModelPathsFile)
         additional_portfolio_methods = None
     # Set up dreambed.
-    rospy.loginfo('ROSManipulationOptimizer: Setting up dreambed...')
-    optimizationLogger = OptimizationLogger(args.log, args.plot, logger)
+    rospy.loginfo('ParameterEvaluation: Setting up dreambed...')
+    optimizationLogger = DummyLogger()
     judge = None
     if args.nosim:
         judge = PlanningPerformanceJudge()
@@ -103,17 +91,20 @@ if __name__ == "__main__":
                                     judge=judge,
                                     logger=logger)
     dreamBed.init(additional_portfolio_methods)
-    rospy.loginfo('ROSManipulationOptimizer: Setting context...')
+    rospy.loginfo('ParameterEvaluation: Setting context...')
     dreamBed.setContext(context)
-    # Create optimizer.
-    rospy.loginfo('ROSManipulationOptimizer: Creating optimizer...')
-    manipOptimizer = ManipulationOptimizer(dreamBed)
-    # Do the job, optimize!
-    rospy.loginfo('ROSManipulationOptimizer: Starting optimizer...')
-    optimalSolution = manipOptimizer.run(numEvals=args.numEvals, deterministic=True)
-    optimizationLogger.savePlot()
+    import IPython
+    IPython.embed()
+    # Call evaluation function once for each parameters set in the list
+    afile = open(args.parameters_file, 'r')
+    parameters_list = yaml.load(afile)
+    afile.close()
+    for i in range(len(parameters_list)):
+        parameters = parameters_list[i]
+        rospy.loginfo('ParameterEvaluation: Evaluating parameters %s' % str(parameters))
+        score = dreamBed.evaluate(**parameters)
+        rospy.loginfo('ParameterEvaluation: Parameters %i achieve a score of %f' %(i, score))
     # debugFunction(dreamBed, context)
     # Done, clean up.
-    rospy.loginfo('ROSManipulationOptimizer: Optimization finished. Terminating.')
+    rospy.loginfo('ParameterEvaluation: Evaluation finished. Terminating.')
     dreamBed.destroy()
-    # TODO: return results somehow
